@@ -1,5 +1,5 @@
 from typing import Annotated
-from xdsl.irdl import (IRDLOperation, OpAttr, Operand, ParameterDef, AnyAttr, irdl_attr_definition, irdl_op_definition, BaseAttr, OptOpAttr)
+from xdsl.irdl import (IRDLOperation, OpAttr, Operand, ParameterDef, AnyAttr, irdl_attr_definition, irdl_op_definition, BaseAttr, OptOpAttr, VarOperand)
 from xdsl.dialects.builtin import StringAttr, IntAttr
 from xdsl.ir import ParametrizedAttribute, TypeAttribute, OpResult
 
@@ -24,6 +24,15 @@ class Buffer(IRDLOperation):
   result: Annotated[OpResult, RegAttr]
 
 @irdl_op_definition
+class Slice(IRDLOperation):
+  name = "hard_flow.slice"
+  of: Annotated[Operand, RegAttr | ValueAttr]
+  lo: OpAttr[IntAttr]
+  hi: OpAttr[IntAttr]
+  uid: OptOpAttr[StringAttr]
+  result: Annotated[OpResult, RegAttr]
+
+@irdl_op_definition
 class Offset(IRDLOperation):
   name = "hard_flow.offset"
   of: Annotated[Operand, RegAttr | ValueAttr]
@@ -42,6 +51,12 @@ class OStream(IRDLOperation):
   uid: OptOpAttr[StringAttr]
   of: Annotated[Operand, RegAttr | ValueAttr]
   result: Annotated[OpResult, RegAttr]
+
+@irdl_op_definition
+class Concat(IRDLOperation):
+  name: str = "hard_flow.concat"
+  nodes: Annotated[VarOperand, RegAttr | ValueAttr]
+  result: Annotated[OpResult, RegAttr | ValueAttr]
 
 @irdl_attr_definition
 class ConstAttr(ParametrizedAttribute, TypeAttribute):

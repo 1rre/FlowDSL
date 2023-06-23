@@ -1,5 +1,6 @@
 from xdsl.dialects import builtin
 from xdsl.ir import MLContext, SSAValue, OpResult, Operation
+from xdsl.irdl import VarOperand
 import xdsl.ir as ir
 from xdsl.passes import ModulePass
 from xdsl.dialects.builtin import ModuleOp, StringAttr, IntAttr
@@ -173,7 +174,10 @@ class Bits(RewritePattern):
       if width != 0:
         width = max(self.bit_usage[op]) - min(self.bit_usage[op]) + 1
       new_result = [reg.RegAttr([IntAttr(time), IntAttr(width)])]
-      rewriter.replace_op(op, op.__class__(op.operands, new_result, op.attributes))
+      if isinstance(op, reg.Concat):
+        rewriter.replace_op(op, op.__class__([op.operands], new_result, op.attributes))
+      else:
+        rewriter.replace_op(op, op.__class__(op.operands, new_result, op.attributes))
 
 
 
@@ -205,10 +209,30 @@ class Compile(RewritePattern):
       time = op.result.typ.time.data # type: ignore
       new_op = reg.Unary(operands=op.operands, result_types=[reg.ValueAttr([IntAttr(time)])], attributes=op.attributes)
       rewriter.replace_op(op, new_op)
+    elif isinstance(op, node.Slice):
+      time = op.result.typ.time.data # type: ignore
+      new_op = reg.Slice(operands=op.operands, result_types=[reg.ValueAttr([IntAttr(time)])], attributes=op.attributes)
+      rewriter.replace_op(op, new_op)
     elif isinstance(op, node.Resettable):
       time = op.result.typ.time.data # type: ignore
       new_op = reg.Resettable(operands=op.operands, result_types=[reg.ValueAttr([IntAttr(time)])], attributes=op.attributes)
       rewriter.replace_op(op, new_op)
+
+    elif isinstance(op, node.Concat):
+      x_t = op.result.typ.time.data
+      buffers: list[Operation] = []
+      for opr in op.operands:
+        right_t = opr.typ.time.data # type: ignore
+        result_t = reg.ValueAttr([IntAttr(x_t - right_t)])
+        if hasattr(op.operands[0].typ, "time"):
+          buffer = reg.Buffer([opr], result_types=[result_t], attributes={"by": result_t})
+          buffers.append(buffer)
+
+      result_t = reg.ValueAttr([IntAttr(x_t)])
+      new_op = reg.Concat([VarOperand(buffers.copy())], result_types=[result_t], attributes=op.attributes) # type: ignore
+      buffers.append(new_op)
+      rewriter.replace_op(op, buffers)
+      
     elif isinstance(op, node.BinOp):
       # This assumes no consts, TODO: Fix
       left = op.operands[0].owner

@@ -25,6 +25,8 @@ def rewrite(op: ir.Operation):
     return v2.BinOp(op.operands, result_types=[v2.NodeAttr()], attributes=op.attributes)
   if isinstance(op, timed.Unary):
     return v2.Unary(op.operands, result_types=[v2.NodeAttr()], attributes=op.attributes)
+  if isinstance(op, timed.Concat):
+    return v2.Concat(op.operands, result_types=[v2.NodeAttr()], attributes=op.attributes)
   return op
 
 class Detimer(RewritePattern):

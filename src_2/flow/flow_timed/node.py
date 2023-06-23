@@ -62,7 +62,7 @@ class Slice(IRDLOperation):
 @irdl_op_definition
 class Concat(IRDLOperation):
   name: str = "flow_timed.concat"
-  nodes: Annotated[VarOperand, NodeAttr]
+  node: Annotated[VarOperand, NodeAttr]
   result: Annotated[OpResult, NodeAttr]
 
 @irdl_op_definition

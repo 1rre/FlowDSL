@@ -81,7 +81,7 @@ class Slice(IRDLOperation):
 @irdl_op_definition
 class Concat(IRDLOperation):
   name: str = "flow_initial.concat"
-  nodes: OpAttr[ArrayAttr[StringAttr]]
+  opr_0: OpAttr[ArrayAttr[StringAttr]]
   result: Annotated[OpResult, NodeAttr]
 
 @irdl_op_definition

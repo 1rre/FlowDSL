@@ -1,6 +1,7 @@
 # Takes input flow2 and emits flow_timed
 from xdsl.dialects import builtin
 from xdsl.ir import MLContext, SSAValue, OpResult, Operation
+from xdsl.irdl import VarOperand
 import xdsl.ir as ir
 from xdsl.passes import ModulePass
 from xdsl.dialects.builtin import ModuleOp, StringAttr, IntAttr
@@ -33,6 +34,12 @@ def construct_timed(op: Operation, lo):
   elif isinstance(op, v2.Slice):
     width = op.result.typ.width.data #type: ignore
     return timed.Slice(operands=op.operands, result_types=[timed.WNodeAttr([IntAttr(lo or 0), IntAttr(width)])], attributes=op.attributes)
+  elif isinstance(op, v2.Concat):
+    opr = VarOperand()
+    for r in op.operands:
+      opr.append(r)
+    print(opr)
+    return timed.Concat(operands=[opr], result_types=[timed.NodeAttr([IntAttr(lo or 0)])], attributes=op.attributes)
   else:
     return op
 
@@ -63,6 +70,30 @@ class SetTimes(RewritePattern):
     elif isinstance(op, v2.Slice):
       if op.operands[0].owner in self.node_mappings:
         self.node_mappings[op] = self.node_mappings[op.operands[0].owner]
+    elif isinstance(op, v2.Concat):
+      def try_put(opr: Operation):
+        if opr in self.node_mappings:  
+          lo_opr, hi_opr = self.node_mappings[opr]
+          if op in self.node_mappings:
+            lo, hi = self.node_mappings[op]
+          else: lo, hi = None, None
+          if lo_opr != None:
+            lo = max(lo or (lo_opr), (lo_opr))
+          if hi_opr != None:
+            hi = max(hi or (hi_opr), (hi_opr))
+          self.node_mappings[op] = lo, hi
+          if hi != None:
+            self.node_mappings[opr] = lo_opr, (hi - 1)
+            if lo_opr == (hi-1):
+              new_op = construct_timed(opr, lo)
+              if opr != new_op:
+                self.node_mappings[new_op] = lo_opr, (hi - 1)
+                rewriter.replace_op(opr, new_op)
+                return True
+      
+      for opr in list(op.operands):
+        try_put(opr.owner)
+    
     elif isinstance(op, v2.BinOp) or isinstance(op, v2.Unary):
       def try_put(opr: Operation):
         if opr in self.node_mappings:  
@@ -100,6 +131,12 @@ class SetTimes(RewritePattern):
         offset = op.attributes["offset"].data #type: ignore
         self.node_mappings[op] = (lo + offset, hi + offset)
         
+    if isinstance(op, v2.Concat):
+      print("Op is concat")
+      print(op in self.node_mappings)
+      print(op in self.rootop.body.ops)
+      print(self.node_mappings[op])
+
     if op in self.node_mappings and op in self.rootop.body.ops:
       lo, hi = self.node_mappings[op]
       if lo == hi:

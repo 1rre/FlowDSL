@@ -1,7 +1,7 @@
 from typing import Annotated, Tuple, TypeVar, Union
-from xdsl.dialects.builtin import (AnyIntegerAttr, StringAttr, IntAttr)
+from xdsl.dialects.builtin import (AnyIntegerAttr, StringAttr, IntAttr, ArrayAttr)
 from xdsl.ir import SSAValue, Dialect, OpResult, Attribute, TypeAttribute, ParametrizedAttribute, Data
-from xdsl.irdl import (IRDLOperation, OpAttr, Operand, ParameterDef, AnyAttr, irdl_attr_definition, irdl_op_definition, BaseAttr, OptOpAttr)
+from xdsl.irdl import (IRDLOperation, OpAttr, VarOperand, Operand, ParameterDef, AnyAttr, irdl_attr_definition, irdl_op_definition, BaseAttr, OptOpAttr)
 
 
 @irdl_attr_definition
@@ -49,6 +49,12 @@ class Slice(IRDLOperation, Flow2Node):
   lo: OpAttr[IntAttr]
   hi: OpAttr[IntAttr]
   node: Annotated[Operand, WNodeAttr]
+  result: Annotated[OpResult, NodeAttr]
+
+@irdl_op_definition
+class Concat(IRDLOperation, Flow2Node):
+  name: str = "flow2.concat"
+  nodes: Annotated[VarOperand, NodeAttr]
   result: Annotated[OpResult, NodeAttr]
 
 @irdl_op_definition

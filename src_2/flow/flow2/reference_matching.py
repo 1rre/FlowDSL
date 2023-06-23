@@ -1,5 +1,6 @@
 from xdsl.dialects import builtin
 from xdsl.ir import MLContext, SSAValue, OpResult
+from xdsl.irdl import VarOperand
 import xdsl.ir as ir
 from xdsl.passes import ModulePass
 from xdsl.dialects.builtin import ModuleOp, StringAttr, IntAttr
@@ -32,6 +33,16 @@ class CheckNames(RewritePattern):
           can_update = False
           break
         oprs.append(self.mappings[opr.data].result)
+      if isinstance(opr, ArrayAttr) and name[0:3] == 'opr':
+        x = VarOperand()
+        for opr2 in opr.data:
+          if opr2.data not in self.mappings:
+            can_update = False
+            break
+          x.append(self.mappings[opr2.data].result)
+        if not can_update: break
+        oprs.append(x)
+          
 
     if not can_update: return
 
@@ -43,7 +54,7 @@ class CheckNames(RewritePattern):
 
     attrs = dict(
       (k,v) for (k,v) in op.attributes.items()
-            if not isinstance(v, StringAttr) or k[0:3] != 'opr'
+            if k[0:3] != 'opr'
     )
 
     if op.result.typ.uid.data[0] != '#':
