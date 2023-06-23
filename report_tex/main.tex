@@ -1,0 +1,146 @@
+\documentclass[a4paper, twoside, 10pt]{extreport}
+\usepackage{extsizes}
+
+\usepackage{csquotes}
+\usepackage{filecontents}
+\usepackage[english]{babel}
+\usepackage{subcaption}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amssymb}
+\usepackage{threeparttable}
+\usepackage{setspace}
+\usepackage{yfonts}
+\usepackage{float}
+\usepackage{multicol}
+\usepackage{tikz}
+\usepackage{parskip}
+\usetikzlibrary{positioning,calc,automata,circuits.ee.IEC,chains,fit,shapes}
+%% Sets page size and margins
+\usepackage[a4paper,top=3cm,bottom=2cm,left=3cm,right=3cm,marginparwidth=1.75cm]{geometry}
+\usepackage[backend=biber,style=ieee,uniquename=init,giveninits=true]{biblatex}
+%% Useful packages
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage[colorinlistoftodos]{todonotes}
+\usepackage[colorlinks=true, allcolors=blue, breaklinks]{hyperref}
+\usepackage{nameref}
+\usepackage{minted}
+\usepackage{cprotect}
+\usepackage{amsmath}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\urlstyle{same}
+
+\pagenumbering{roman}
+
+%\makeatletter
+%\renewcommand*{\thelisting}{\thesection.\arabic{listing}}
+%\@addtoreset{listing}{section}
+%\makeatother
+\counterwithin{listing}{chapter}
+
+\makeatletter
+\def\BState{\State\hskip-\ALG@thistlm}
+\makeatother
+\lstset{
+basicstyle=\small\ttfamily,
+columns=flexible,
+breaklines=true
+}
+
+\makeatletter
+\let\my@chapter\@chapter
+\renewcommand*{\@chapter}{%
+  \addtocontents{lol}{\protect\addvspace{10pt}}%
+  \my@chapter}
+\makeatother
+
+\tikzset{
+  op/.style={circle,draw,minimum width=2.5em,inner sep=1pt,font=\small},
+  buf/.style={rectangle,draw,minimum height=2.5em,minimum width=2.5em,font=\small},
+  add/.style={op,node contents={$+$}},
+  sub/.style={op,node contents={$-$}},
+  div/.style={op,node contents={$\div$}},
+  div_4/.style={op,node contents={$\div$ $4$}},
+  >=stealth
+}
+\newcommand\drawdh[4][]% diagonal horizontal
+  {\draw[#1]
+     let \p1=(#2),\p2=(#3) in
+     (#2) -- node[above,font=\scriptsize]{#4}
+     ({\x1+abs(\y2-\y1)*sign(\x2-\x1)},\y2) -- (#3);%
+  }
+\newcommand\drawdv[4][]% diagonal vertical
+  {\draw[#1]
+     let \p1=(#2),\p2=(#3) in
+     (#2) -- node[above,font=\scriptsize]{#4}
+     (\x2,{\y1+abs(\x2-\x1)*sign(\y2-\y1)}) -- (#3);%
+  }
+
+\bibliography{bibs/sample}
+
+\title{Flow DSL: A Domain-Specific Language for Static Streaming Hardware}
+\author{Timothy Moores}
+% Update supervisor and other title stuff in title/title.tex
+
+\begin{document}
+\input{title/title.tex}
+
+
+\raggedbottom
+
+\begin{abstract}
+  \thispagestyle{plain}
+Hardware stream processing is often achieved using low-level register transfer languages. Despite these languages introducing complexity to the design process, when designing systems at the register transfer level, the timing of modules must be manually evaluated each time the module is instantiated to ensure all branches of the stream are synchronised. This is due to most commonly available alternatives being too high level for the design of stream processing hardware.
+\\ \\
+While toolkits for designing stream processing hardware do exist, they are largely inaccessible to individuals and implemented in ways which are not immediately compatible with the concept of stream processing. In this paper we present a domain-specific language for writing such systems in the form of dataflow graphs and a reference implementation of a compiler to transform it to Verilog for synthesis or simulation.
+\\ \\
+This paper introduces a domain-specific language (DSL) that simplifies hardware stream processing design by representing systems as dataflow graphs. The DSL abstracts away the intricacies of low-level languages while maintaining the necessary precision for hardware design. Additionally, a compiler is provided that transforms the DSL into Verilog, ensuring compatibility with established tools.
+\\ \\
+Flow DSL was found to be a useful tool for high level synthesis, successfully bridging the gap between abstract dataflow graphs and complex hardware constructs. When compared to hand-written Verilog, the optimisations of Flow DSL can make noticeable resource usage improvements and is significantly shorter to write and modify, and the inherent flexibility and simplicity makes Flow DSL a productive alternative added to the hardware development landscape.
+
+
+\end{abstract}
+\newpage
+\renewcommand{\abstractname}{Acknowledgements}
+\begin{abstract}
+  \thispagestyle{plain}
+  \setcounter{page}{2}
+  \begin{itemize}
+    \item \textbf{Professor Paul Kelly}: For his unwavering support and mentorship throughout the course of this project. His dedication, insights, and countless hours of supervision have been a constant source of guidance and inspiration.
+    \item \textbf{Dr.\ Tony Field}: Whose astute advice significantly influenced the trajectory of this project.
+    \item \textbf{George Bisbas}: For his generous assistance in familiarizing me with xDSL. His expertise and willingness to share knowledge have been invaluable in navigating the technical aspects of the project.
+  \end{itemize}
+  Additionally, I would like to express my appreciation to:
+  \begin{itemize}
+    \item \textbf{Razvan Rusu}, \textbf{Neel Dugar} and \textbf{Sherwin Da Cruz}: Our numerous foosball breaks were not just games; they were essential mental health breaks that kept me grounded and balanced and had a significant role in maintaining my well-being throughout the project.
+  \end{itemize}
+\end{abstract}
+
+\tableofcontents
+\listoffigures
+\listoftables
+\listoflistings
+\newpage
+
+\pagenumbering{arabic}
+\clearpage
+% Introduction
+\input{incl/10_introduction.tex}
+% Setting
+\input{incl/20_background.tex}
+% Implementation
+\input{incl/30_requirements.tex}
+\input{incl/35_design.tex}
+\input{incl/40_compilation.tex}
+% Review
+\input{incl/50_evaluation.tex}
+\input{incl/55_extensions.tex}
+\input{incl/60_conclusion.tex}
+% Misc.
+
+\printbibliography{}
+
+\end{document}

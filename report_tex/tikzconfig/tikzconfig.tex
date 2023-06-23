@@ -1,0 +1,60 @@
+% the contents of \squarecorner were mostly stolen from pgfmoduleshapes.code.tex
+\def\squarecorner#1{
+    % Calculate x
+    %
+    % First, is width < minimum width?
+    \pgf@x=\the\wd\pgfnodeparttextbox%
+    \pgfmathsetlength\pgf@xc{\pgfkeysvalueof{/pgf/inner xsep}}%
+    \advance\pgf@x by 2\pgf@xc%
+    \pgfmathsetlength\pgf@xb{\pgfkeysvalueof{/pgf/minimum width}}%
+    \ifdim\pgf@x<\pgf@xb%
+        % yes, too small. Enlarge...
+        \pgf@x=\pgf@xb%
+    \fi%
+    % Calculate y
+    %
+    % First, is height+depth < minimum height?
+    \pgf@y=\ht\pgfnodeparttextbox%
+    \advance\pgf@y by\dp\pgfnodeparttextbox%
+    \pgfmathsetlength\pgf@yc{\pgfkeysvalueof{/pgf/inner ysep}}%
+    \advance\pgf@y by 2\pgf@yc%
+    \pgfmathsetlength\pgf@yb{\pgfkeysvalueof{/pgf/minimum height}}%
+    \ifdim\pgf@y<\pgf@yb%
+        % yes, too small. Enlarge...
+        \pgf@y=\pgf@yb%
+    \fi%
+    %
+    % this \ifdim is the actual part that makes the node dimensions square.
+    \ifdim\pgf@x<\pgf@y%
+        \pgf@x=\pgf@y%
+    \else
+        \pgf@y=\pgf@x%
+    \fi
+    %
+    % Now, calculate right border: .5\wd\pgfnodeparttextbox + .5 \pgf@x + #1outer sep
+    \pgf@x=#1.5\pgf@x%
+    \advance\pgf@x by.5\wd\pgfnodeparttextbox%
+    \pgfmathsetlength\pgf@xa{\pgfkeysvalueof{/pgf/outer xsep}}%
+    \advance\pgf@x by#1\pgf@xa%
+    % Now, calculate upper border: .5\ht-.5\dp + .5 \pgf@y + #1outer sep
+    \pgf@y=#1.5\pgf@y%
+    \advance\pgf@y by-.5\dp\pgfnodeparttextbox%
+    \advance\pgf@y by.5\ht\pgfnodeparttextbox%
+    \pgfmathsetlength\pgf@ya{\pgfkeysvalueof{/pgf/outer ysep}}%
+    \advance\pgf@y by#1\pgf@ya%
+}
+\makeatother
+
+\pgfdeclareshape{square}{
+    \savedanchor\northeast{\squarecorner{}}
+    \savedanchor\southwest{\squarecorner{-}}
+
+    \foreach \x in {east,west} \foreach \y in {north,mid,base,south} {
+        \inheritanchor[from=rectangle]{\y\space\x}
+    }
+    \foreach \x in {east,west,north,mid,base,south,center,text} {
+        \inheritanchor[from=rectangle]{\x}
+    }
+    \inheritanchorborder[from=rectangle]
+    \inheritbackgroundpath[from=rectangle]
+}

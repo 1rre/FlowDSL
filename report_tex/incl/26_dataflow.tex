@@ -1,0 +1,85 @@
+\section{Dataflow Programming Model}\label{dataflow}
+The dataflow programming model is a declarative programming model wherein the program is described as a directed graph. This structures the program as operations, which are represented as the vertices of the graph, and dependencies, which are represented as the directed edges of the graph. By specifying the flow of data through the program, rather than specifying an order for computations to be done in, as in imperative programming, each node of the graph can be executed concurrently, leading to performance improvements in parallel and distributed computing environments where hardware allows for this.
+
+Within this graph, the edges represent the data itself, whereas the vertices represent an operation upon the vertices which are connected to it, outputting a value on the edges connected from it. Not all vertices have operands or results, however, as nodes can be external inputs or outputs, as well as constant values. Each node and branch of the graph can be computed in isolation from other nodes or branches, therefore there is a lot of potential for parallelism.
+
+\subsection{In Software}
+In the context of software, the dataflow programming model is generally used on a high level and often in applications which use huge amounts of data, such as cloud data movement \& processing and machine learning. While these applications, especially machine learning, are occasionally compiled to hardware, they are far more often run on off-the-shelf processing units. These may be optimised for parallelism, such as GPUs, or for general use, such as CPUs, however in either case the compiled program is not guaranteed to retain the same parallelisability as the original graph due to the limitations of the hardware they are running on. Optimising compilers for imperative code often use a dataflow programming model internally, as it can be easier to perform optimisations by removing redundant computations, reordering instructions, eliminating dead variables and more when the program is structured as a graph of its operations and their dependencies, with no implicit ordering between independent computations.
+
+\subsection{In Hardware}
+In the context of hardware, the dataflow programming model is much more similar to RTL code than it is to machine code for software. This is because there are far fewer restrictions on the number of parallel computations which can occur in hardware, being limited only on FPGAs by the number of logic elements available. Without the concept of a `current instruction' which changes every clock cycle, which is controlled by a program counter in a usual CPU, each node of the dataflow graph can be computed as and when all of its dependencies are available, or even on every clock cycle.
+
+\subsection{Static Streaming Dataflow}
+Static streaming dataflow is a specific variant of the dataflow programming model that focuses on streaming computations through a dataflow graph at a high throughput. It is commonly used in the design of signal processing systems and other applications where data is continuously processed in real-time. In a static streaming dataflow graph, it is assumed that inputs will be received at a regular interval, equivalent to the `enable' signal being held high in a non-streaming dataflow hardware application. As there is an assumption of a new input every cycle, any operation that may introduce a stall, such as reading or writing to a synchronous RAM block, must be used with caution to ensure it won't produce a perpetual backlog. While in some applications it may be acceptable to skip inputs in the case of a stall, this project will focus on the applications where every input must generate an output.
+
+\subsection{Related Work}
+\subsubsection{Single Assignment C and the Cameron Project}
+SB. Scholz' Single Assignment C \cite{sa-c} has been used in by Rinker et al. \cite{920828} in a subset of the Cameron project \cite{najjar1998cameron}, for compiling acyclic dataflow graphs to hardware, highlighting the single assignment model's association with both the dataflow programming model and high level synthesis. While Single Assignment C is not immediately compatible with the cyclic dataflow programming model, the combination of the Cameron project's dataflow graph compiler and the concepts brought forward by Single Assignment C provide a good introduction to how the dataflow programming model can be seen as adjacent to hardware.
+
+\subsubsection{Lustre}
+Lustre \cite{lustre} is a declarative, synchronous, streaming dataflow language for programming real-time systems in software, specifically designed for systems that interact with their environment at a pace determined by the environment, for instance in the critical parts of Airbus aircrafts. As it is a streaming dataflow language, the length of the input vector is assumed to be infinite \hyphen{} indeed in the applications of critical system monitoring it should be running the entire time the system is powered up.
+
+Lustre allows for inputs of both integer and vector form, and has a number of helper functions which are often useful in real time systems programming using real world data, such as the dot product operator \lstinline|.*|, and additional boolean operations such as \lstinline|implies|, where \lstinline|implies(a, b)| returns true if \lstinline|b| is true or \lstinline|a| is false. This is useful in systems programming to assert `whenever \lstinline|a| is high, \lstinline|b| should also be high'. It also allows the previous value of a variable to be retrieved with \lstinline|pre|, shown together with the dot product operator in listing \ref{lustre.mvg_avg}.
+
+Lustre, along with the dataflow programming model in general, is especially well suited to formal verification as shown by Hagen \& Tinelli in their 2008 paper `Scaling up the formal verification of Lustre programs with SMT-based techniques' \cite{lustreverification}. Formal verification is especially useful for hardware, as explained in section \cite{formal_verif}.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{text}
+node MovingAverage(t_0: int[5], t_1: int[5]) returns (output: real);
+var
+  input: int;
+  total: real;
+  div_t: real;
+const
+  avg_window: int = 4;
+let
+  input = t_0 .* t_1;
+  t_0 = pre(input, avg_window) - input;
+  total = pre(total, 0.0) + t_0
+  div_t = total / real(avg_window);
+  output = div_t;
+tel
+  \end{minted}
+  \caption{A Lustre implementation of a dot product moving average}\label{lustre.mvg_avg}
+\end{listing}
+
+\subsubsection{Maxeler MaxJ}
+MaxJ \cite{maxj} is a high-level, static streaming dataflow language developed by Maxeler Technologies for implementing dataflow computing for hardware acceleration. MaxJ's MaxCompiler uses a Java-like syntax and runs in the Java runtime environment, allowing users to use the features and conveniences of Java while expressing their applications as a highly parallelised and pipelined streaming dataflow graph. The key feature of MaxJ is its ability to express dataflow computations in a way that can be compiled, via effective and powerful optimisations, to hardware designs that are capable of achieving high-performance. This is particularly important in fields such as finance, oil and gas exploration, scientific research, and data analytics where FPGAs can offer significant speedup over traditional CPU and GPU architectures.
+
+MaxJ is closed source and not easy to get information on, however it is designed to work for compilation to and high-performance \& predictable execution on Maxeler's hardware platforms Maxeler's own FPGA products, as the data movement and processing can be optimised in advance based on the static analysis of the code and the architecture of Maxeler's FPGAs.
+
+MaxJ uses what it calls `Kernels' to perform operations on the stream, and the previous value in the stream can be accessed using `Registers'. There are also accumulators and reduction methods built into the language, which allows for simple cycles to be constructed, and the "offset" function, which allows past values of already declared `DFEVar's, but not forward references. By nature of being embedded in Java, which requires a large amount of `BoilerPlate' code, MaxJ can be fairly unwieldy even for simple designs, such as the moving average kernel shown in listing \ref{maxj.mvg_avg}.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{java}
+public class MovingAverageKernel extends Kernel {
+    public MovingAverageKernel(KernelParameters parameters) {
+        super(parameters);
+
+        int avgWindow = 4;
+        Stream<Input> in0 = io.input("in0", dfeUInt(8));
+        Register<DFEVar> t_0 = control.count.simpleCounter(1);
+        DFEVar c1 = constant.var(avgWindow);
+        Loop iterate = control.count.makeCounter(avgWindow);
+        DFEVar sum = dfeUInt(8);
+        sum <== stream.offset(in0, iterate) + sum;
+        t_0 <== sum - in0;
+        Accumulator acc = Reductions.accumulator;
+        Params paramsInt = acc.makeAccumulatorConfig(dfeInt(10));
+        DFEVar total = acc.makeAccumulator(a, paramsInt);
+        DFEVar div_t = total / c1;
+        io.output("out0", div_t, dfeInt(8));
+    }
+}
+\end{minted}
+  \caption{A Maxeler MaxJ implementation of a moving average}\label{maxj.mvg_avg}
+\end{listing}
+
+
+\subsubsection{Design and Optimisation of Behavioral Dataflows}
+Liu's 2019 dissertation, `Design and Optimisation of Behavioral Dataflows' \cite{liu2019design}, discusses design and optimisations of dataflow hardware systems. While the first few chapters on pin multiplexing, DSE and inter-module connections are beyond the scope of this project, the chapters on pure dataflow optimisation, ie from 6 onwards, are highly relevant. These chapters investigate and propose algorithms for how different branches of a dataflow graph should be optimised and retimed differently to result in an optimal final dataflow graph.
+
+\subsubsection{A Second Opinion on Data Flow Machines and Languages}
+`A Second Opinion on Data Flow Machines and Languages' \cite{secondopinion} provides a thorough analysis of dataflow computing as of the time time paper was published \hyphen{} 1982. Due to the factual nature of dataflow programming, most of the observations in the paper are still relevant to this day. One of the primary observations of the paper is that while dataflow models are intuitively attractive and conceptually simple, their implementation can be complex and difficult. The authors argue that the key to practical dataflow machines lies in the careful management of the `tokens' that represent data in the system. These `tokens' are considered in a time-insensitive environment as is often present in software, there is no restrictions on buffering, therefore a `token' may be held at the input to a node indefinitely while the other inputs to that node become ready. Furthermore, the authors propose improvements to dataflow languages that aim to better expose opportunities for parallelism while also providing tools for managing the complexities of synchronization and communication.

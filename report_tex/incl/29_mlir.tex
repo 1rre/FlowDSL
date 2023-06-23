@@ -1,0 +1,23 @@
+\section{Intermediate Representation Frameworks}\label{irf}
+Intermediate Representation (IR) frameworks play a critical role in the design and implementation of modern compilers. They offer a high-level abstraction of code that is between the source language the target language, often a high level software language and an assembly language, without being too strongly tailored to either. This layer of abstraction simplifies various phases of compilation, including analysis, optimization, and code generation, and facilitates retargetability and code portability.
+
+The IR framework used during compilation can have a significant impact on the compiler's effectiveness and the quality of the generated code, due to its support for optimisation passes \hyphen{} both defined by the complier's author and by others who have contributed to the framework's codebase. By affecting the compiler's ability to optimise code, the IR framework plays a significant role in determining the final program's performance. An ideal IR should be compact, easy to generate and transform, capable of representing all source language constructs, and effective for target machine code generation.
+
+IRs are typically designed to represent the flow of data in a program, and different IRs, often called `dialects', are used for different phases of compilation, including high-level, mid-level, and low-level IRs. High-level IRs are closer to the source language, low-level IRs are closer to the machine code, and mid-level IRs bridge the gap between them, however there may be many of each of high-level IRs, low-level IRs and mid-level IRs.
+
+\subsection{Related Work}
+\subsubsection{MLIR}
+Multi-Level Intermediate Representation (MLIR) \cite{mlir} is an IR framework developed by the LLVM project. MLIR is designed to bridge the gap between high-level, domain-specific representations and low-level, target-specific representations. The framework provides a common infrastructure to build multiple levels of abstraction into a single unified IR, addressing the growing need for multiple abstraction levels in modern software stacks.
+
+One of the key features of MLIR is its support for a mix of high-level and low-level dialects in the same module, thus providing flexibility in optimizing different parts of a program at different abstraction levels. This simplifies the design and implementation of complex compiler transformations that operate across abstraction boundaries.
+
+MLIR is based on a flexible type system and operation-centric design, which makes it simple to define new types and operations. It provides a pattern-based rewriting infrastructure that reduces the difficulty of implementing transformations and analyses.
+
+MLIR promotes a progressive lowering approach where high-level constructs are gradually lowered to simpler constructs, with optimizations performed at each level. This enables high-level optimizations that are aware of the semantic context and low-level optimizations that are close to the target language.
+
+\subsubsection{xDSL}
+xDSL \cite{xdsl-home} is a framework designed to simplify the creation and manipulation of domain-specific languages (DSLs) used in intermediate representations. It is written in Python, which results in lower barriers to entry and faster development than equivalent IRs written in lower level languages. It provides a set of constructs that can be used to define the syntax and semantics of a DSL, thus allowing the compiler or tool writer to focus on the logic of the transformation or analysis they're implementing rather than the details of parsing or code generation.
+
+xDSL supports multiple extensions to its IR, called `Dialects', making it a versatile tool in the development of compilers and static analysers. It facilitates the optimization and analysis of the different dialects using shared algorithms and tools, and the ability to translate between dialects, which is especially important in the context of modern software stacks that employ multiple programming languages and target diverse execution environments.
+
+The xDSL framework provides a set of capabilities that are useful for compiler infrastructure, the majority of which are modular and extensible. This modularity allows components to be reused across different projects and promotes an open-source development model where individual components can be developed independently. It supports the design of compiler pipelines which promote a clean separation between IR design and optimization algorithms.

@@ -1,0 +1,73 @@
+\chapter{Requirements}\label{chap:requirements}
+In this chapter we discuss the research and technical requirements of this project, in terms of high level, language design and performance requirements.
+
+\section{Research Question}
+The main research question to be answered by this project is ``What reaching applications could static streaming dataflow optimisations have for hardware compilation and compilation in general?'' This question should be answered by evaluating the type of project or design which benefits from being analysed from a static streaming dataflow viewpoint.
+
+\section{Principles of Language Design}
+The primary objective of the Flow DSL is to capture and represent dataflow graphs. These graphs are essential for modeling computations in a way that is inherently parallel and can be efficiently mapped to hardware, such as FPGAs. The language design is centreed around the principles of simplicity, expressiveness, and integration with Python. These principles guide the development of features and abstractions in the language.
+
+Flow DSL aims to provide a simple and intuitive syntax for defining dataflow graphs. By leveraging Python's syntax, the language ensures that users familiar with Python can easily adapt to the DSL. The simplicity principle should be reflected in the minimalistic approach to defining dataflow graph.
+
+While simplicity is key, the language must also be expressive enough to capture complex dataflow graphs. This includes support for various data types and operations. The language provides abstractions for nodes and edges, and supports a range of arithmetic and logical operations. There should also be support for cycles within the dataflow graph.
+
+\section{High Level Requirements}
+The envisioned DSL should provide an interface for defining input and output streams, facilitating communication with external data sources. These external sources are beyond the control of the hardware, necessitating the assumption of a fixed one value per input stream per clock cycle. This requirement, in turn, leads to the necessity for a reset functionality capable of performing within a single clock cycle, enabling the system to reset in between batch computations and maintain continuous operation.
+
+The DSL should offer a time-agnostic way of declaring a dataflow graph in a high level language for compilation to hardware. Such a graph should be expressed in terms of its inputs, outputs, and the operations that transform data from the former to the latter. This approach allows users to focus on the logical sequence of data transformation without being concerned about the temporal aspects of the computation, while allowing the compiler to retime and relocate parts of the graph without violating the constraints set by the user.
+
+As stencil computations, which involve computations over multidimensional grids and are common in applications such as image processing, and finite impulse response (FIR) filters, are a frequent use of static synchronous streaming hardware (SSSH), operations common in these filters such as multiplication, summation, and delays should be supported.
+
+The language should also be able to serve as an intermediate representation in its own right, capturing the semantics of an HLS hardware design in a dataflow graph which is far more amenable to optimisation and methods such as formal verification to ensure the correctness of the compilation process.
+
+\section{Dataflow}
+When considering static streaming dataflow graphs, there are a number of abstractions from both traditional control flow based imperative programming models and from RTL languages for developing hardware that must be kept, where possible, in a DSL designed to allow for the creation of these graphs. The structure of the graph is specified, however the timing is not, therefore optimisations can be applied by retiming and adding or removing buffers in different parts of the graph to encourage reuse and efficient computation.
+
+\section{Streaming}
+In a Static Streaming Dataflow Graph (SSDG), inputs are assumed to be populated and outputs extracted at regular intervals. By use of clock dividers and counters, the input can be set as the baseline at one input per clock cycle. While it is theoretically possible to have a situation in an SSDG where the output rate is faster than the input rate, as well as shown in figure \ref{req.streaming.out}, this is deemed to be out of scope for this project. It is still possible to implement, as each input can simply be fed in twice, however no specific support or optimisations for this will be added. There is also a possibility for a situation where the input rate is faster than the output rate, however in this case half of the inputs can just be ignored at the cost of potentially missing out on optimisations resulting in inputs not needing to be calculated every clock cycle. By establishing that the graph is always active as an input arrives on every update and that every output is used, we remove the need for any control flow within the DSL.
+
+\begin{figure}[H]
+  \centering
+\begin{tikzpicture}
+  
+  \edef\sizetape{0.7cm}
+  \tikzstyle{istream}=[draw,minimum height=\sizetape,minimum width=2 * \sizetape]
+  \tikzstyle{iactive}=[arrow box,draw,minimum size=.5cm,arrow box arrows={east:0.25cm}]
+  
+  \begin{scope}[start chain=1 going right,node distance=-0.15mm]
+      \node [on chain=1,istream] (in0) {$i_0$};
+      \node [on chain=1,istream] (in1) {$i_1$};
+      \node [on chain=1,istream] (in2) {$i_2$};
+  \end{scope}
+  \node [iactive,yshift=-.3cm,minimum width=2*\sizetape] at (in1.south) (ihead) {$in$};
+
+  \tikzstyle{ostream}=[draw,minimum size=\sizetape]
+  \begin{scope}[start chain=2 going right,node distance=-0.15mm,below=of ihead]
+    \node [on chain=2,ostream,below=of in0,yshift=-6cm,xshift=-0.35cm] (out0) {$o_0$};
+    \node [on chain=2,ostream] (out0a) {$o_1$};
+    \node [on chain=2,ostream] (out1) {$o_2$};
+    \node [on chain=2,ostream] (out1a) {$o_3$};
+    \node [on chain=2,ostream] (out2) {$o_4$};
+    \node [on chain=2,ostream] (out2a) {$o_5$};
+  \end{scope}
+  \node [iactive,yshift=.3cm] at (out0a.north) (ohead) {$out$};
+      
+
+  \begin{scope}
+    \node (buf_0) [buf,below left=of ihead,yshift=0.5cm,xshift=0.6cm]{last};
+    \node (add_1) [add,below=of buf_0,xshift=0.5cm,yshift=0.5cm];
+    \node (div_1) [div,below=of add_1,yshift=0.5cm];
+    \draw[->](ihead)--(buf_0);
+    \draw[->](ihead)--(add_1);
+    \draw[->](buf_0)--(add_1);
+    \draw[->](add_1)--(div_1);
+    \draw[->](div_1)--(ohead);
+  \end{scope}
+  
+  \end{tikzpicture}
+  \caption{An SSDG where the output is clocked faster than the input}\label{req.streaming.out}
+\end{figure}
+
+\par\noindent\hrulefill\par
+
+In this section we detailed the research and technical requirements for this project, along with detailing some related aspects which are deemed to be out of scope of the project.

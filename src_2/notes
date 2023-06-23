@@ -1,0 +1,38 @@
+
+# OpenSPL
+# Grok?
+# Maxelar lecture notes?
+
+# Introduce the reader to the background
+# Show appreciation for related work
+## Identify confusingly simililar but different
+## MaxJ: Survey article
+## Value to be had in revisiting?
+### Doing it in XDSL
+### Talk about compilation problems
+#### VS RTL in general
+#### Is dataflow a programming model/foundation
+#### Lose track of flow? Tagged Token?
+#### Dynamically scheduled out of order?
+#### Directive based HLS
+#### Throughput is key
+#### Easier to mess up HLS?
+### Timing? Latency/Area tradeoffs
+# Frame what it is I'm trying to survey
+
+# Synchronous dataflow programming?
+# Lustre
+# Real Time Embedded Systems
+# When thinking of dataflow as dynamic
+# it sucks you into a world of inefficient hardare mechanisms
+# Make claims about the contribution of the project
+# Convolutions/FIR filters?
+
+# Maybe use 2nd year rover project?
+# Alternatively use more complex examples?
+# Proper evaluation
+# Find things which don't work
+# Maybe a BRAM?
+# Would always assume a hold?
+# Make it so bank conflicts don't
+# Talk about stalls in future work

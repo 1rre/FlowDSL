@@ -1,0 +1,78 @@
+\section{Embedded Domain-Specific Languages}\label{edsl}
+A domain-specific language (DSL) is a programming language specialised to a particular domain \cite{CACCIAGRANO2020100020}. DSLs are often used to improve the productivity of programmers by providing a more concise and expressive way to write code. Unlike external DSLs, which have their own syntax and type system, embedded DSLs `piggyback' off a host language, with the compiler or interpreter for the DSL usually being available as a package or library for that language. The host language is most frequently a general purpose language, where general purpose languages differ from domain-specific languages in that they may be used in many different domains.
+
+\subsection{Related Work}
+\subsubsection{Chisel}
+Chisel is an embedded DSL for writing hardware designs in Scala developed at University of California, Berkeley. Despite being an embedded DSL, the exceptional support Scala provides for creating embedded DSLs allows for Chisel to be an extremely expressive Hardware Development Language. It provides finer control over the hardware design and offers a more direct representation of the underlying circuitry than HLS tools, however, Chisel's integration with Scala enables a higher level of abstraction and productivity through the use of modern programming language features than afforded by most HDLs such as SystemVerilog or VHDL. Chisel does not use Scala's core types, instead using Chisel types derived from `Bits'. Using its own assignment operator along with the powerful reflection tools within the Scala compiler and Java Virtual Machine, the DSL backend captures the state of each wire and register. This state is then utilised by the Chisel backend to generate the corresponding low-level hardware description. The backend can output the design in Verilog and FIRRTL amongst others, which can be further processed by EDA tools for synthesis, simulation, and implementation. There is also a simulation runtime called `Treadle' and a testing \& formal verification framework called `ChiselTest' built into the library, which allows for testing directly from Scala and therefore even greater productivity. An example of parametrisation in Chisel allowing for an inner product of vectors of parametrised width can be found in listing \ref{chisel.innerproduct}.
+
+Chisel differs from Flow DSL in that Chisel provides a more direct representation of the underlying hardware than Flow DSL, which abstracts a significant proportion of hardware concepts away, however Chisel does have similar variable capture mechanisms to those used by Flow DSL and explained in section \ref{varname}, as well as syntax generally similar to the host language.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{scala}
+class InnerProduct(width: Int) extends Module {
+  val io = IO(new Bundle {
+    val vectorA = Input(Vec(width, UInt(32.W)))
+    val vectorB = Input(Vec(width, UInt(32.W)))
+    val result = Output(UInt(32.W))
+  })
+  
+  io.result :=
+    io.vectorA.zip(io.vectorB)
+              .map(((_:UInt)*(_:UInt)).tupled)
+              .reduce(_+_)
+}
+\end{minted}
+  \caption{A Chisel implementation of an inner product}\label{chisel.innerproduct}
+\end{listing}
+
+\subsubsection{Spatial}
+Spatial is an embedded DSL developed for HLS hardware accelerator applications, using Scala as a host language. It provides a higher level of abstraction compared to traditional HLS tools while offering finer control over the hardware design than general purpose HLS languages. Spatial allows for the description of computations in a high level using a \lstinline|accel| block using a Scala anonymous function, decoupling the design from specific architectural details. Spatial provides constructs for parallel, sequential and pipelined architectures from a single \lstinline|accel| block, simply by tweaking the config. The \lstinline|Range.par(Int)| function in listing \ref{spatial.innerproduct}, taken from Spatial's tutorial \cite{spatialtut} takes the \lstinline|reduce| calculation and parallelises it, in the case of the example by a factor of 2 and 4 in each usage. The example also shows SRAMs being declared within a loop, which allows for multiple banks of SRAMs to be declared to match the parallelism factor.
+
+Spatial is similar to Flow DSL in that it allows for fully pipelined accelerated sections of a design, however while Flow DSL is designed for end-to-end design in dataflow graphs, Spatial is designed to only have parts of a design be pipelined \hyphen{} others may be parallelised, sequential or partially pipelined.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{scala}
+Accel {
+  // *** Parallelize tile
+  x := Reduce(Reg[T](0))(len by tileSize par 2){tile =>
+    // *** Declare SRAMs inside loop
+    val s1 = SRAM[T](tileSize)
+    val s2 = SRAM[T](tileSize)
+    
+    s1.load(d1(tile::tile+tileSize))
+    s2.load(d2(tile::tile+tileSize))
+    
+    // *** Parallelize i
+    Reduce(Reg[T])(0)(tileSize by 1 par 4){i => 
+      s1(i) * s2(i)
+    }{_+_}
+  }{_+_}
+}
+\end{minted}
+  \caption{Spatial's provided implementation of an inner product}\label{spatial.innerproduct}
+\end{listing}
+
+\subsubsection{Keras}
+Keras is a high level API for describing models for deep learning frameworks; most often for Tensorflow. Keras allows for machine learning models to be programmatically declared via a DSL embedded in Python, including through modular design. While Keras does not support cyclic graphs in most cases, it can be extended with recurrent layers such as LSTM (Long Short-Term Memory) or GRU (Gated Recurrent Unit), which have internal cycles which are hidden from the user, in a similar way to the Accumulator node in a number of dataflow languages. This differs from Flow DSL in that Flow DSL can have either hidden \& implicit or explicit \& external cycles, whereas Keras only allows for hidden \& implicit cycles. Keras also allows for networks to be described functionally, as in listing \ref{keras.dataflow.sequential} or imperatively, as in listing \ref{keras.dataflow.programatic}. These construction methods essentially produce the same graph given the same layers.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python3}
+model = tf.keras.Sequential()
+model.add(tf.keras.layers.Dense(64, activation='relu', input_shape=[256, 256, 3]))
+return model.compile(optimizer='adam', loss='categorical_crossentropy')
+  \end{minted}
+  \caption{A Keras model constructed functionally}\label{keras.dataflow.sequential}
+\end{listing}
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python3}
+inputs = tf.keras.layers.Input(shape=[256, 256, 3])
+outputs = keras.layers.Dense(64, activation='relu')(inputs)
+return tf.keras.Model(inputs=inputs, outputs=outputs)
+  \end{minted}
+  \caption{A Keras model constructed programmatically}\label{keras.dataflow.programatic}
+\end{listing}

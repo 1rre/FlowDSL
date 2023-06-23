@@ -1,0 +1,61 @@
+\chapter{Future Extensions}
+This section details additions which, given more time, would have been good to add to Flow DSL. These range from expansions to fixes to further optimisations. While Flow DSL in its current form is a useful tool, the addition of these fixes would make it far better.
+
+\section{Replacement of the retiming algorithm}\label{ext.retime}
+The current implementation of the retiming algorithm has several limitations which results in some dataflow graphs with low dependency distance across cycles, such as that in listing \ref{notworking}, not being possible to compile. This is because the current timing algorithm cannot retime operations to take less than a single clock cycle \hyphen{} buffering expected after every arithmetic operation.
+
+The proposed replacement for this timing algorithm is a new system wherein each node is given a current time, a minimum and a maximum time, with the minimum and maximum times being either relative to the time of its inputs becoming ready or absolute. Initially all current times will be zero, and all minimum and maximum times will be \lstinline|None|. In non-cyclic graphs, the maximum time will always be \lstinline|None|, however in cyclic graphs, some nodes can be expected to have a maximum ready time depending on the dependency distance. Each operation will have a desired length \hyphen{} allowing for complex operations like division and multiplication to be pipelined across multiple clock cycles, and the per-node timing tweaked in such a way that the timing is as close to this target length of time after the timing of its inputs as possible without going over the maximum ready time. The minimum ready time will be one after its inputs in the case of accumulators and immediate cycles to prevent values from being self-dependant, or in most cases will be zero.
+
+This replacement would allow for far more powerful optimisations and pipelining to be used, as well as allowing for more dataflow graphs than currently possible to be compiled.
+
+\makeatletter
+\AtBeginEnvironment{minted}{\dontdofcolorbox}
+\def\dontdofcolorbox{\renewcommand\fcolorbox[4][]{##4}}
+\makeatother
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{python}
+x = gr.istream()
+y = gr.istream()
+z = gr.ostream((gr.forward_ref("a").offset(-1) + x) * y)
+  \end{minted}
+  \cprotect\caption{A sub-clock cycle operation}\label{notworking}
+\end{listing}
+
+\section{More types}
+Flow DSL currently only supports unsigned integers. This severely limits the scope of the language even for integer computations as sign extension will not be applied. As a result there may be a number of instances where the produced Verilog theoretically matches with the code the system designer wrote, however it does not match with their intentions as they planned to do signed computations. This is extra important if the overflow protections in section \ref{overflow.prot} get implemented, as that would result in addition of a negative number and a positive number to produce the largest unsigned number possible in the given bit width, or from a signed perspective \lstinline|-1|.
+
+It would also be beneficial to introduce fractional types to allow for integral maps and other common stream processing operations which operate on floats. Initially this would be through fixed point, as it is comparatively simple to implement this as an extension of signed integers, however eventually full floating point should be made available. Floating point arithmetic is far more computationally complex than fixed point or integral arithmetic, therefore it would necessitate the multi-cycle optimisation suggested in section \ref{ext.retime} to avoid having an extremely low clock speed.
+
+\section{Used bit analysis}
+While variable usage in software programs is limited to whole variables, variables in hardware are usually a single bit, with the exceptions usually coming in the form of shift registers and multipliers. As a result, constant folding and variable usage optimisations can be applied to single bits; this would allow for optimisations based on multiplication by even numbers being even, or further constant folding through slices among others.
+
+\section{Overflow Protection}\label{overflow.prot}
+Currently the signal width determination algorithm ignores the concept of overflow, however in the domain of streamed dataflow programming where a value could increase infinitely, it must be considered.
+
+While overflow is sometimes abused by developers to produce `tricks', such as signed addition with unsigned numbers, this is not something which should be enabled by the Flow DSL once support for signed and float types are added. Considering the Flow DSL program in listing \ref{overflow}, when all values are unsigned, it is clear that when \lstinline|z| is greater than \lstinline|0xFFFF|, the output value will be \lstinline|0| even when it is in fact greater. By capping the value of \lstinline|y| to \lstinline|0xFFFF|, or even \lstinline|0x10000|, we honour the input specification by always outputting a high signal if y is greater than \lstinline|0x7FFF|. There are considerations which need to be made for if a capped value is output \hyphen{} is it better to output the maximum representable value or an overflowed value when neither honour the input value? This gets harder when there are other operations which may subtract values ahead of the signal which overflows.
+
+\makeatletter
+\AtBeginEnvironment{minted}{\dontdofcolorbox}
+\def\dontdofcolorbox{\renewcommand\fcolorbox[4][]{##4}}
+\makeatother
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{python}
+x = gr.istream(16)
+y = x + x
+z = gr.ostream(y > gr.const(0x7FFF), 1)
+  \end{minted}
+  \cprotect\caption{An example where overflow protections are necessary}\label{overflow}
+\end{listing}
+
+
+\section{Improved decoupling}
+The final stage of the compilation process and the \lstinline|FlowPrinter| class are currently highly intertwined. While \lstinline|FlowPrinter| does contain a number of concepts which are `pointed' towards Verilog and similar language, such as name generation for unnamed variables and buffers, something which would not be supported by for example LLHD, these concepts would be useful for retargeting to VHDL, Chisel or other tools which do not use SSA in the same way as LLHD or CIRCT.
+
+\section{Adding to xDSL}
+The project contains a lot of workarounds for how xDSL works, however to increase the extensibility and potential to reuse, it would be good to add proper support for the operations which needed workarounds to the core xDSL library. These workarounds include ignoring the requirement for programs represented within xDSL to be acyclic \& rewrite patterns to be side-effect free, as discussed in section \ref{dialect.namecheck}.
+
+A better alternative to misusing xDSL and applying workarounds in the future would be to create dedicated subclasses of xDSL optimisation helper classes for applications which require forward references, such as Prolog and the declarative programming model generally, or other types of dataflow programming.
+
+\par\noindent\hrulefill\par
+
+In this section we discussed potential expansions for Flow DSL which, given more time, would have been useful to include in this project. Some alternative methods for the project were also given.

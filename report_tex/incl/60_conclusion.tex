@@ -1,0 +1,27 @@
+\chapter{Conclusion}
+This chapter discusses potential applications of the Flow DSL. It outlines its reusability in hardware DSL development and its potential role as an Intermediate Representation (IR) for hardware compilers focusing on dataflow structure. We end with a reflection on the creation of Flow DSL.
+
+\section{Applications for the Project}
+\subsection*{Dialect Reuse}
+As xDSL dialects are resusable by design, anyone making a hardware DSL using xDSL, or a dataflow DSL, will be able to reuse any and all of the xDSL dialects created for Flow DSL and introduced in section \ref{chap:compilation}. This could prove useful for anyone making HLS tools \hyphen{} someone working with xDSL in the future could leverage the dialects implemented for Flow DSL as an alternative target, allowing for compilation to hardware of high level software languages.
+
+Similarly, anyone creating a dataflow language for software could simply keep the Flow DSL frontend and stitch it into an existing xDSL dialect which has routes to target software \hyphen{} either some form of bytecode like BEAM, WASM, .NET or JVM, or to machine code which works essentially as an infinite loop, reading inputs and writing outputs in a loop. The optimisations in Flow DSL could be used as a form of software pipelining.
+
+\subsection{Use as an Intermediate Representation}
+The Flow DSL can be an effective IR for hardware design, providing a layer where high-level languages can be translated into hardware constructs. Its focus on dataflow structure over timing details enables potential optimizations such as retiming and buffering during the compilation process. However, it should be noted that as of the current state of Flow DSL, it lacks the ability to remove buffers, except in very specific cases. Further research and work may be required to overcome this limitation.
+
+Moreover, the Flow DSL's ability to handle streaming data, by assuming that inputs are populated and outputs are extracted at regular intervals, fits the requirements of an IR in terms of accommodating stream-oriented computations. This makes Flow DSL an ideal candidate for an IR, bridging the gap between high-level programming paradigms and low-level hardware representations.
+
+The dynamic retiming system would also be a useful component of the compilation process of a HLS tool. Unlike static timing, this system provides the flexibility of adjusting the ordering and positions of operations within a pipeline based on the specific requirements of data dependencies, instead of fixed, predetermined timing constraints. This flexibility not only ensures correctness \hyphen{} something HLS tools can have issues with as shown by Herklotz, Pollard, Ramanathan, and Wickerson \cite{formal_verif}, but also allows for the dataflow optimisations provided by Flow DSL to be applied.
+
+\subsection{Retargeting to CIRCT}
+The Circuit IR Compilers and Tools (CIRCT) \cite{circt} project, a component of the LLVM ecosystem, provides a novel approach to digital design and circuit compilation. It employs a software compiler infrastructure for hardware design. Given its high-level abstraction capacity, Flow DSL can be retargeted to the CIRCT framework.
+
+Retargeting Flow DSL to CIRCT can potentially provide several benefits. Firstly, it can allow the use of CIRCT's optimization passes on the output RTL code, enhancing the efficiency of the hardware designs aside from dataflow-specific optimisations. Secondly, it can facilitate the integration with other LLVM-based tools, opening routes to more target languages.
+
+\section{Final Remarks}
+The journey of creating Flow DSL, a new domain-specific language that simplifies the design of stream processing hardware, has been both challenging and rewarding. We have crafted a product which leverages the flexibility of Python to provide an intuitive and user-friendly way of developing hardware-accelerated stream processing applications.
+
+Flow DSL distinguishes itself through the simplification of complex hardware details, such as the concept of registers and a clock, while still providing a platform for synthesising complex and efficient hardware designs. We have demonstrated how the DSL allows for complex dataflow algorithms, such as generic stencil computers, to be elegantly expressed in an easily comprehensible high-level language, which is subsequently translated into functionally equivalent Verilog code.
+
+This work can be added to the growing body of evidence suggesting that software and hardware languages do not have to be confined to separate worlds, but can interact and learn from each other to produce tools that are both powerful and accessible. Just as we have used the principles of dataflow programming to inform our design of the Flow DSL, we anticipate that future tools will continue to draw from the rich and diverse tapestry of programming paradigms to create innovative and user-friendly solutions.

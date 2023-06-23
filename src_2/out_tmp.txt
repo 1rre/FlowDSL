@@ -1,0 +1,324 @@
+
+
+from xdsl.dialects import builtin
+from xdsl.ir import MLContext, SSAValue, OpResult
+import xdsl.ir as ir
+from xdsl.passes import ModulePass
+from xdsl.dialects.builtin import ModuleOp, StringAttr, IntAttr
+from xdsl.pattern_rewriter import (
+  PatternRewriter, RewritePattern, op_type_rewrite_pattern, PatternRewriteWalker
+)
+from typing import Annotated
+from flow.flow2.dialect.node import *
+
+def dce(op, ops: list[ir.Operation]):
+  if not isinstance(op, Flow2Node) or isinstance(op, OStream): return False
+  for opr in ops:
+    for ond in opr.operands:
+      if ond.owner == op: return False
+  return True
+
+
+class DeadCodeEliminator(RewritePattern):
+  ops: list[ir.Operation]
+  def __init__(self, names: list[str], ops: list[ir.Operation]):
+    self.ops = ops
+    RewritePattern.__init__(self)
+  @op_type_rewrite_pattern
+  def match_and_rewrite(self, op: ir.Operation, rewriter: PatternRewriter):
+    if dce(op, self.ops):
+      rewriter.erase_op(op)
+  
+
+from xdsl.dialects import builtin
+from xdsl.ir import MLContext, SSAValue, OpResult, Operation
+import xdsl.ir as ir
+from xdsl.passes import ModulePass
+from xdsl.dialects.builtin import ModuleOp, StringAttr, IntAttr
+from xdsl.pattern_rewriter import (
+  PatternRewriter, RewritePattern, op_type_rewrite_pattern, PatternRewriteWalker
+)
+from typing import Annotated
+from flow.flow2.dce import DeadCodeEliminator, dce
+from flow.flow2.dialect.node import *
+
+class Deduplicate(RewritePattern):
+  names: list[str]
+  ops: list[ir.Operation]
+  def __init__(self, names, ops):
+    self.names = names
+    self.ops = ops
+    RewritePattern.__init__(self)
+
+  @op_type_rewrite_pattern
+  def match_and_rewrite(self, op: ir.Operation, rewriter: PatternRewriter):
+    pass
+
+# TODO: Add removal of offset 0 to this
+
+class OffsetRenamer(RewritePattern):
+  names: list[str]
+  ops: list[ir.Operation]
+  def __init__(self, names, ops):
+    self.names = names
+    self.ops = ops
+    RewritePattern.__init__(self)
+  @op_type_rewrite_pattern
+  def match_and_rewrite(self, op: ir.Operation, rewriter: PatternRewriter):
+    if dce(op, self.ops):
+      rewriter.erase_op(op)
+    elif isinstance(op, Offset):
+      arg = op.operands[0]
+      if arg.owner == op:
+        print("Self-owned")
+      elif isinstance(arg.owner, Offset):
+        print("Renaming offset")
+        offset = arg.owner.attributes["offset"].data + op.attributes["offset"].data # type: ignore
+        node = arg.owner.operands[0] # type: ignore
+        result_types = [res.typ for res in op.results]
+        new_op = Offset(operands=[node], result_types=result_types, attributes={"offset": IntAttr(offset)})
+        rewriter.replace_op(op, new_op)
+        return
+      if op.attributes['offset'].data == 0 and isinstance(arg.owner, Operation):
+        # First we need to replace anything that depends on this op
+        for use in list(op.result.uses):
+          new_operands = [(opr if opr != op.result else arg) for opr in use.operation.operands]
+          types = [res.typ for res in use.operation.results]
+          new_op = use.operation.__class__(operands = new_operands, result_types=types, attributes=use.operation.attributes)
+          rewriter.replace_op(use.operation, new_op)
+
+
+class Deduplicator(ModulePass):
+  name = "flow2.dedup"
+  names: list[str]
+  ops: list[ir.Operation]
+  def __init__(self, names: list[str], ops: list[ir.Operation]):
+    self.names = names
+    self.ops = ops
+    ModulePass.__init__(self)
+
+  def apply(self, ctx: MLContext, op: ModuleOp) -> None:
+    PatternRewriteWalker(DeadCodeEliminator(self.names, self.ops)).rewrite_module(op)
+    PatternRewriteWalker(OffsetRenamer(self.names, self.ops)).rewrite_module(op)
+    PatternRewriteWalker(DeadCodeEliminator(self.names, self.ops)).rewrite_module(op)
+    PatternRewriteWalker(Deduplicate(self.names, self.ops)).rewrite_module(op)
+    PatternRewriteWalker(DeadCodeEliminator(self.names, self.ops)).rewrite_module(op)
+from typing import Annotated, Tuple, TypeVar, Union
+from xdsl.dialects.builtin import (AnyIntegerAttr, StringAttr, IntAttr)
+from xdsl.ir import SSAValue, Dialect, OpResult, Attribute, TypeAttribute, ParametrizedAttribute, Data
+from xdsl.irdl import (IRDLOperation, OpAttr, Operand, ParameterDef, AnyAttr, irdl_attr_definition, irdl_op_definition, BaseAttr, OptOpAttr)
+
+
+@irdl_attr_definition
+class NodeAttr(ParametrizedAttribute, TypeAttribute):
+  name = "flow2.node"
+  # Timing is now done later on
+  # time: ParameterDef[IntAttr]
+
+class Flow2Node: pass
+
+@irdl_op_definition
+class Const(IRDLOperation, Flow2Node):
+  name: str = "flow2.const"
+  result: Annotated[OpResult, NodeAttr]
+  uid: OptOpAttr[StringAttr]
+
+
+@irdl_op_definition
+class IStream(IRDLOperation, Flow2Node):
+  name: str = "flow2.istream"
+  result: Annotated[OpResult, NodeAttr]
+  uid: OptOpAttr[StringAttr]
+
+@irdl_op_definition
+class OStream(IRDLOperation, Flow2Node):
+  name: str = "flow2.ostream"
+  node: Annotated[Operand, NodeAttr]
+  result: Annotated[OpResult, NodeAttr]
+  uid: OptOpAttr[StringAttr]
+
+@irdl_op_definition
+class Offset(IRDLOperation, Flow2Node):
+  name: str = "flow2.offset"
+  offset: OpAttr[AnyIntegerAttr]
+  node: Annotated[Operand, NodeAttr]
+  result: Annotated[OpResult, NodeAttr]
+  uid: OptOpAttr[StringAttr]
+  
+# TODO: Subgraphs
+
+@irdl_op_definition
+class BinOp(IRDLOperation, Flow2Node):
+  name: str = "flow2.binop"
+  result: Annotated[OpResult, NodeAttr]
+  left: Annotated[Operand, NodeAttr]
+  right: Annotated[Operand, NodeAttr]
+  op: OpAttr[StringAttr]
+  uid: OptOpAttr[StringAttr]
+
+
+from xdsl.dialects import builtin
+from xdsl.ir import MLContext, SSAValue, OpResult
+import xdsl.ir as ir
+from xdsl.passes import ModulePass
+from xdsl.dialects.builtin import ModuleOp, StringAttr, IntAttr
+from xdsl.pattern_rewriter import (
+  PatternRewriter, RewritePattern, op_type_rewrite_pattern, PatternRewriteWalker
+)
+from typing import Annotated
+from flow.flow2.dialect.node import *
+
+class OffsetDelay(RewritePattern):
+  names: list[str]
+  ops: list[ir.Operation]
+  def __init__(self, names, ops):
+    self.names = names
+    self.ops = ops
+    RewritePattern.__init__(self)
+  @op_type_rewrite_pattern
+  def match_and_rewrite(self, op: ir.Operation, rewriter: PatternRewriter):
+    if isinstance(op, Offset):
+      arg = op.operands[0]
+      if op == arg.owner:
+        print("Self dep!")
+      if isinstance(arg.owner, IStream):
+        return
+      elif isinstance(arg.owner, Offset):
+        print("Offsetting an offset?")
+        offset = arg.owner.attributes["offset"].data + op.attributes["offset"].data # type: ignore
+        node = arg.owner.operands[0]
+        result_types = [res.typ for res in op.results]
+        new_op = Offset(operands=[node], result_types=result_types, attributes={"offset": IntAttr(offset)})
+        rewriter.replace_op(op, new_op)
+        return
+      elif isinstance(arg.owner, BinOp):
+        print("Offsetting a binop")
+        offset_by = op.attributes["offset"] # type: ignore
+        arg1 = arg.owner.operands[0]
+        arg2 = arg.owner.operands[1]
+        new_arg1 = Offset(operands=[arg1], result_types=[NodeAttr()], attributes={"offset": offset_by})
+        new_arg2 = Offset(operands=[arg2], result_types=[NodeAttr()], attributes={"offset": offset_by})
+        new_op = BinOp(operands=[new_arg1, new_arg2], result_types=[NodeAttr()], attributes={"op": arg.owner.attributes["op"]})
+        rewriter.replace_op(op, [new_arg1, new_arg2, new_op])
+
+class SubSub(RewritePattern):
+  @op_type_rewrite_pattern
+  def match_and_rewrite(self, op: ir.Operation, rewriter: PatternRewriter):
+    if isinstance(op, BinOp):
+      if op.attributes["op"].data == '-':
+        print("got a minus")
+        arg1 = op.operands[0].owner
+        arg2 = op.operands[1].owner
+        print(arg1)
+        print(arg2)
+        print(f"{arg1 == arg2}")
+
+
+class Expander(ModulePass):
+  name = "flow2.expand"
+  names: list[str]
+  ops: list[ir.Operation]
+  def __init__(self, names: list[str], ops: list[ir.Operation]):
+    self.names = names
+    self.ops = ops
+    ModulePass.__init__(self)
+
+  def apply(self, ctx: MLContext, op: ModuleOp) -> None:
+    PatternRewriteWalker(OffsetDelay(self.names, self.ops), apply_recursively=False).rewrite_module(op)
+    PatternRewriteWalker(OffsetDelay(self.names, self.ops), apply_recursively=False).rewrite_module(op)
+    PatternRewriteWalker(SubSub()).rewrite_module(op)
+
+from xdsl.dialects import builtin
+from xdsl.ir import MLContext, SSAValue, OpResult
+import xdsl.ir as ir
+from xdsl.passes import ModulePass
+from xdsl.dialects.builtin import ModuleOp, StringAttr, IntAttr
+from xdsl.pattern_rewriter import (
+  PatternRewriter, RewritePattern, op_type_rewrite_pattern, PatternRewriteWalker
+)
+from typing import Annotated
+from flow.flow2.dce import DeadCodeEliminator
+from flow.flow2.dialect.node import *
+
+class CheckNames(RewritePattern):
+  names: list[str]
+  ops: list[ir.Operation]
+  def __init__(self, names, ops):
+    self.names = names
+    self.ops = ops
+    RewritePattern.__init__(self)
+
+  @op_type_rewrite_pattern
+  def match_and_rewrite(self, op: ir.Operation, rewriter: PatternRewriter):
+    if isinstance(op, ModuleOp): return
+    assert len(op.results) == 1, f"0 or multiple op results found for {op}"
+    # Ignore stuff that doesn't return a node
+    if op.name == "flow_initial.istream":
+      #time: Annotated[IntAttr, any] = op.results[0].typ.__annotations__['time']
+      #print(time)
+      uid = op.results[0].typ.uid
+      attrs = {} if uid.data[0] == '#' else {"uid": uid}
+      new = IStream(result_types=[NodeAttr()], attributes=attrs)
+      self.ops[self.ops.index(op)] = new
+      rewriter.replace_op(op, [new])
+
+    elif op.name == "flow_initial.ostream":
+      node = op.attributes['node'].data # type: ignore
+      assert node in self.names, f"Node {node} does not exist in {self.names}"
+      idx = self.names.index(node)
+      new_node = OpResult.get(self.ops[idx])
+      uid = op.results[0].typ.uid
+      attrs = {} if uid.data[0] == '#' else {"uid": uid}
+      new_op = OStream(result_types=[NodeAttr()], operands=[new_node], attributes=attrs)
+      rewriter.replace_op(op, [new_op])
+      self.ops[self.ops.index(op)] = new_op
+
+    elif op.name == "flow_initial.binop":
+      left = op.attributes['left'].data # type: ignore
+      assert left in self.names, f"Node {op.attributes['left']} does not exist in {self.names}"
+      right = op.attributes['right'].data # type: ignore
+      assert right in self.names, f"Node {right} does not exist in {self.names}"
+      idx_l = self.names.index(left)
+      left_new = OpResult.get(self.ops[idx_l])
+      idx_r = self.names.index(right)
+      right_new = OpResult.get(self.ops[idx_r])
+      uid = op.results[0].typ.uid
+      attrs = {"op": op.attributes["op"]} if uid.data[0] == '#' else {"uid": uid, "op": op.attributes["op"]}
+      new_op = BinOp(operands=[left_new, right_new], result_types=[NodeAttr()], attributes=attrs)
+      rewriter.replace_op(op, [new_op])
+      self.ops[self.ops.index(op)] = new_op
+
+    elif op.name == "flow_initial.offset":
+      node = op.attributes['node'].data # type: ignore
+      assert node in self.names, f"Node {node} does not exist in {self.names}"
+      idx = self.names.index(node)
+      new = OpResult.get(self.ops[idx])
+      uid = op.results[0].typ.uid
+      attrs = {"offset": op.attributes["offset"]} if uid.data[0] == '#' else {"offset": op.attributes["offset"], "uid": uid}
+      new_op = Offset(operands=[new], attributes=attrs, result_types=[NodeAttr()])
+      rewriter.replace_op(op, [new_op])
+      self.ops[self.ops.index(op)] = new_op
+      
+    elif op.name == "flow_initial.const":
+      # This should have been verified already
+      uid = op.results[0].typ.uid
+      attrs = {} if uid.data[0] == '#' else {"uid": uid}
+      new_op = Const(result_types=[NodeAttr()], attributes=op.attributes | attrs)
+      rewriter.replace_op(op, [new_op])
+      self.ops[self.ops.index(op)] = new_op
+      pass
+
+
+class ReferenceMatching(ModulePass):
+  name = "flow2.match_reference"
+  names: list[str]
+  ops: list[ir.Operation]
+  def __init__(self, names: list[str], ops: list[ir.Operation]):
+    self.names = names
+    self.ops = ops
+    ModulePass.__init__(self)
+
+  def apply(self, ctx: MLContext, op: ModuleOp) -> None:
+    PatternRewriteWalker(CheckNames(self.names, self.ops)).rewrite_module(op)
+    PatternRewriteWalker(DeadCodeEliminator(self.names, self.ops)).rewrite_module(op)
+

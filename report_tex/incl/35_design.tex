@@ -1,0 +1,135 @@
+\chapter{Language Design}\label{chap:embedding}
+
+This section discusses the specific design of the domain-specific language within Python and the method for embedding the DSL within Python and the decision making process behind this.
+
+\section{Introduction}
+
+\section{Types}
+\subsection{Graph}
+A graph represents the largest unit of compilation, equivalent to a module in a HDL or a full program in a software programming language. A single graph is instantiated and used as a base, similar to the \lstinline|Sequential()| class in Keras.
+
+\subsection{Node}
+A node in the Flow DSL differs slightly to a node in a dataflow graph insofar as a node in the Flow DSL not only can represent some form of operation on the data, it can also be a no-op to give information to the compiler, or used as operands for other nodes, implicitly getting its result edge, rather than explicitly calling a \lstinline|Node.result()| function.
+
+\subsection{Data Types}
+Currently all values are treated as unsigned integers, the only exceptions being for the \lstinline|-| and \lstinline|abs| unary operations and the subtrahend in the binary \lstinline|-| operation. The inputs to these operations are signed in all cases due to their inherently sign sensitive nature, however their results are not treated as signed. It is possible to have an integral input, output or const of any given width, however the default width is 32 bits. The widths of all other nodes are decided on context, as any bits which will not have an effect on any output will be eliminated.
+
+\section{Operators and Functions}
+\subsection{Logical and Arithmetic operators}
+The binary logical and arithmetic operators, ie \lstinline|*|, \lstinline|/|, \lstinline|%|, \lstinline|+|, \lstinline|-|, \lstinline|&|, \lstinline||| and \lstinline|^| for binary operators all perform the same role as they do in Python, and are all implemented with the `BinOp' operation. While it would be possible to implement a different IRDL operation for each of these binary operators, which would additionally make optimisations based on redundant logical operations simpler, this would be a future expansion and was not done to reduce the complexity of the dialects.
+
+Each binary operator has a result width, this is based on the width of its inputs and/or the used width of its outputs. Once processed, the resultant truncated inputs and outputs are as stated in the table \ref{embedding.binops.width}. As all values are treated as unsigned integers, there is zero extension rather than sign extension applied to either operand in the case of mismatched widths.
+
+\subsubsection{Slices}
+In many cases, in hardware it may be necessary to perform operations on only part of a wire, for example when processing RGBA pixel data or divider output in a \lstinline|{hi, lo}| format. While it may be possible to truncate the least significant bits of a value using a right shift, and the most significant bits using a bitwise and with a constant, this is a lot of work for such a simple operation. Slices work as they do in Python, ie with the square bracket operator, for instance \lstinline|Node[int:int]|. One can also perform a slice of a single bit with simply \lstinline|Node[int]|, which implicitly sets the upper bound of the slice to one greater than the lower bound, which is set to the operand.
+
+\subsubsection{Concatenation}
+As with slices, it is often necessary to merge multiple values together, either into a bus or into a larger single wire \hyphen{} often as the inverse of slicing. Again, this is theoretically possible with a combination of shifts and binary operations, however it is again a convoluted process for such a common operation. We therefore provide an additional binary operator, the \lstinline|@| operator, which is used for concatenating the value of two output edges. This operator was chosen as it is already used for concatenation in languages such as F\#.
+
+\begin{table}[h]
+  \centering
+  \begin{tabular}{|c|c|c|c|}
+    \hline
+    \textbf{Operator} & \textbf{Input 1 Width} & \textbf{Input 2 Width} & \textbf{Output Width} \\
+    \hline \lstinline|&| (BAND) & $w_1$ & $w_2$ & $\max(w_1, w_2)$ \\
+    \hline \lstinline||| (BOR) & $w_1$ & $w_2$ & $\max(w_1, w_2)$ \\
+    \hline \lstinline|^| (XOR) & $w_1$ & $w_2$ & $\max(w_1, w_2)$ \\
+    \hline \lstinline|+| (ADD) & $w_1$ & $w_2$ & $\max(w_1, w_2) + 1$ \\
+    \hline \lstinline|-| (SUB) & $w_1$ & $w_2$ & $\max(w_1, w_2) + 1$ \\
+    \hline \lstinline|*| (MUL) & $w_1$ & $w_2$ & $w_1 + w_2$ \\
+    \hline \lstinline|/| (DIV) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|%| (MOD) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|<<| (LSL) & $w_1$ & $c_1$ & $w_1 + c_1$ \\
+    \hline \lstinline|>>| (LSR) & $w_1$ & $c_1$ & $w_1 - c_1$ \\
+    \hline \lstinline|and| (LAND) & $w_1$ & $w_2$ & $1$ \\
+    \hline \lstinline|or| (LOR) & $w_1$ & $w_2$ & $1$ \\
+    \hline \lstinline|==| (EQ) & $w_1$ & $w_2$ & $1$ \\
+    \hline \lstinline|!=| (NEQ) & $w_1$ & $w_2$ & $1$ \\
+    \hline \lstinline|>=| (GE) & $w_1$ & $w_2$ & $1$ \\
+    \hline \lstinline|>| (GT) & $w_1$ & $w_2$ & $1$ \\
+    \hline \lstinline|<=| (LE) & $w_1$ & $w_2$ & $1$ \\
+    \hline \lstinline|<| (LT) & $w_1$ & $w_2$ & $1$ \\
+    \hline \lstinline|@| (CAT) & $w_1$ & $w_2$ & $w_1 + w_2$ \\
+    \hline \lstinline|[c1:c2]| (SLICE) & $w_1$ & $c_1, c_2$ & $c_2 - c_1$ \\
+    \hline
+  \end{tabular}
+  \caption{Default bit width of binary operators based on input widths}\label{embedding.binops.width}
+\end{table}
+
+\subsubsection{Unary Operators}
+The unary operators in the Flow DSL are \lstinline|not|, \lstinline|~|, \lstinline|-| and \lstinline|+|. Unary \lstinline|not|, \lstinline|~| and \lstinline|-| perform the same role one would expect, that is logical not, bitwise not and negation respectively. The unary \lstinline|+| operator works as a resettable accumulator, that is an accumulator which has the current value treated as zero if the reset signal is held low. This functionality is also accessible through \lstinline|Graph.accumulate(node)|, however as accumulators are so commonly used a unary operator was dedicated to them.
+
+\subsubsection{Resets}
+Similarly to the accumulator, users will be able to generate their own single cycle accumulator, or have a general reset signal, using the \lstinline|Node.with_reset(int)| function. This function will result in a wire, as opposed to a register, which will mirror the output of the node it is called on unless \lstinline|reset_n|, an implicitly introduced signal in the hardware design, is high. The accumulator, \lstinline|Graph.accumulate(node)|, is a subset of a resettable signal, however due to how frequently addition accumulators are used, it was given its own function.
+
+\subsection{Offsets}
+Offsets are possible using the \lstinline|Node.offset(int)| function, gets the value of the output edge of that node in \lstinline|n| clock cycles if \lstinline|n| is positive, or the value of the output edge \lstinline|-n| clock cycles ago if \lstinline|n| is negative, where \lstinline|n| is the operand to the offset function. While it would have been possible to implement \lstinline|Node.last()| and \lstinline|Node.next()|, or alternatively \lstinline|Node.last(int)| and \lstinline|Node.next(int)|, this would've required extra processing to deal with negative inputs to these functions anyway, therefore it was deemed simpler and equal in functionality to use a single function for both offsets into the future and into the past. The ability to access the previous and future values of an edge are integral to dataflow computing, as they allow for running totals akin to the \lstinline|scan| function in many functional programming languages, as can be seen in figure \ref{design.mvg_avg.total}. \lstinline|fold| and \lstinline|reduce| are also implicitly possible using a top level module \hyphen{} to acheive this one would use a reset signal to reset the accumulator when input begins, and simply ignore the output until all input data is processed.
+
+\begin{figure}[H]
+  \centering
+  \begin{tikzpicture}[node distance=1cm,circuit ee IEC]
+    % below n
+    \node (n) {$[x_{-n}, ..., x_{-1}, x_0, x_1, ..., x_{n}]$};
+    \node (buf_0) [buf,below left=of n,xshift=1.5cm]{last};
+    \node (buf_1) [buf,below=of buf_0]{last};
+    \node (buf_2) [buf,below=of buf_1]{last};
+    \node (add_0) [add, below=of n,yshift=-1cm];
+    \node (buf_3) [buf,below right=of add_0]{last};
+    \node (sub_0) [sub, below left=of buf_3];
+    \node (div_0) [div_4,below=of sub_0];
+    \node (y) [below=of div_0] {$[y_{-n}, ..., y_{-1}, y_0, y_1, ..., y_{n}]$};
+    \draw[->](n)--(buf_0);
+    \draw[->](buf_0)--(buf_1);
+    \draw[->](buf_1)--(buf_2);
+    \draw[->](n)--(add_0);
+    \draw[->](buf_3)--(add_0);
+    \draw[->](add_0)--(sub_0);
+    \draw[->](buf_2)--(sub_0);
+    \draw[->](sub_0)--(div_0);
+    \draw[->](sub_0)--(buf_3);
+    \draw[->](div_0)--(y);
+  \end{tikzpicture}
+  \caption{Cyclic Dataflow Graph for a Moving Average}\label{design.mvg_avg.total}
+\end{figure}
+
+\subsection{Forward Referencing}
+Due to the time-sensitive graph-based nature of the Flow DSL, a variable does not need to be instantiated in code for it to be instantiated in the graph. An example of this is the moving average calculator shown in figure \ref{design.mvg_avg.total}. The same is true for any possible cyclic graph; so long as the value of an edge doesn't depend on its value at the current time, it is a valid dataflow graph and can be compiled to hardware via the Flow DSL. If the value of an edge is found to depend on its value at the current, a compiler error is produced as the graph is unrepresentable in hardware. In the figure, the \lstinline|last| nodes take the previous value of the vertex going into them. A \lstinline|next| node would take the next value of the vertex going into them, however as the next value is unknown at a given time, it can and must be rewritten as a \lstinline|last| node; see chapter \ref{chap:compilation} for more information on this.
+
+\section{Variable Naming}
+Variable names are able to be used much in the same way as Python. This includes the overwriting of variables \hyphen{} the code samples in listings \ref{python.varname.loop} and \ref{python.varname.array} are functionally identical.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python3}
+named = gr.const(0)
+for i in range(1, 5):
+  named = in0 + named
+out_named = gr.ostream(in0 // named)
+  \end{minted}
+  \caption{Overwriting variables using renaming}\label{python.varname.loop}
+\end{listing}
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python3}
+named = [gr.const(0)]
+for i in range(1, 5):
+  named.append(in0 + named[-1])
+out_named = gr.ostream(in0 // named[-1])
+  \end{minted}
+  \caption{Keeping variables live in Python using a list}\label{python.varname.array}
+\end{listing}
+
+\section{Alternatives Considered}
+
+In the development of the Flow DSL, several alternatives and approaches were considered to handle variable referencing and attribute access within the graph. Two notable concepts that were considered were the so-called `addvar' and `getvar' methods, and the use of Python's \lstinline|__getattr__| and \lstinline|__setattr__| magic methods. We will discuss each of these approaches and analyze their potential advantages and disadvantages.
+
+\subsection{Using addvar and getvar for Variable Referencing}
+The `addvar' and `getvar' concept was used to reference variables based on their names. The `addvar' method would be used to add a variable to the graph, while the `getvar' method would be used to retrieve the value of a variable from the graph using its name. This approach was not used due to a number of drawbacks \hyphen{} firstly, it was incompatible with existing linters, unlike non-forward references in the final version. This negates some of the benefits of using an embedded DSL. Additionally the variable names used in Python were not the same as those emitted in Verilog. There were also the same function scoping issues as described in section \ref{varname}, however as the user would be using strings, rather than variable names, the disconnect is even more obvious.
+
+\subsection{Using \texttt{\textunderscore\textunderscore getattr\textunderscore\textunderscore} and \texttt{\textunderscore\textunderscore setattr\textunderscore\textunderscore} Magic Methods}
+An different approach to variable naming is to use Python's \lstinline|__getattr__| and \lstinline|__setattr__| magic methods. These methods are automatically called when getting or setting an attribute of an object, respectively. These could be called on the \lstinline|Graph| object, rather than using the varname package, with all other features being the same. This would likely be a better alternative to using varname, as varname is fairly unstable and relies on Python internals whereas \lstinline|__getattr__| and \lstinline|__setattr__| are built-in methods. The one issue with \lstinline|__getattr__| and \lstinline|__setattr__| is that they may interract with methods and objects within the graph in unexpected ways, especially if a variable name happens to share a name with one of these.
+
+\par\noindent\hrulefill\par
+
+This section discussed the design and methodology behind Flow DSL's embedding in Python, and the rationale behind that design and methodology. Graph and Node types were introduced, along with the operations which work on these types.

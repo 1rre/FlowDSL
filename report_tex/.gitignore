@@ -1,0 +1,9 @@
+*
+!*/
+!*.tex
+!*.eps
+!*.kilepr
+!*.bib
+!*.bbx
+!*.cbx
+!.gitignore

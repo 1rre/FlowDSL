@@ -1,0 +1,261 @@
+\chapter{Evaluation}
+In this chapter, Flow DSL is compared to both the requirements set in section \ref{chap:requirements} and the existing HDLs Chisel and Verilog, then the results of these comparisons analysed and considered.
+
+\section{Research Question}
+Static streaming dataflow optimisations have been found to have been a useful tool for hardware compilation, enabling a number of optimisations to be applied. This will have reaching consequences and potential applications in a number of hardware compilers, even those which do not explicitly use dataflow, due to the simplicity of the system allowing for easy inclusion in existing compilation processes.
+
+\section{Comparison to Requirements}
+\subsection{Principles of Language Design}
+The Gaussian blur code in Flow DSL is relatively simple and intuitive. It leverages Python's syntax, making it easy for users familiar with Python to understand. The code defines dataflow graphs in a minimalistic way, which aligns with the simplicity principle of Flow DSL.
+
+The code is expressive enough to capture a complex dataflow graph for Gaussian blur, as in listing \ref{python.gb.kernel}. It currently only supports unsigned integers as data types, therefore the requirement to support various data types is not met, however it does include a number of arithmetic operations as well as accumulators, as well as more user-defined cycle forms.
+
+\subsection{High Level Requirements}
+Inputs and outputs are both easily declared via the \lstinline|Graph| object, which is in line with the high level requirements. The DSL also allows for declaration of a dataflow graph in a high-level language without specifying the timing, again meeting the requirements. It focuses on the logical sequence of data transformation without being concerned about the temporal aspects.
+
+Resets \hyphen{} or rather holding signals to a set value, are possible within a single clock cycle due to the mechanisms described in section \ref{reset.implicit}. While this started out of a stopgap solution to allow for user-defined accumulator functions in a `reduce' or `fold' format, this is a useful feature to have, as it allows for the dataflow graph to be reset to the initial `state' without needing to add clocked logic. This does stray slightly from the concept of `static' streaming dataflow graphs, however the ability to batch dataflow computations is useful eg. when processing multiple images.
+
+The Gaussian blur is a type of stencil computation, and the code in listing \ref{python.gb.kernel} demonstrates how Flow DSL can be used for such computations and more. It involves summation and multiplication, as necessitated by the requirements.
+
+\subsection{Dataflow}
+Code written in the DSL specifies the structure of the dataflow graph (inputs, outputs, and operations) but does not specify timing, allowing for potential optimizations such as retiming and buffering by the compiler.
+
+The compiler itself is able to apply some retiming, adding buffers as necessary, however it currently doesn't possess the ability to remove buffers except for in very specific situations \hyphen{} currently only when a constant value is involved, or when an offset is used such that the value needs no buffering between the time it becomes available and the time it is used. The implications of this and potential fixes are discussed further in section \ref{ext.retime}.
+
+\subsection{Streaming}
+The DSL compiler assumes that inputs are populated and outputs are extracted at regular intervals \hyphen{} once per clock cycle. However, the DSL itself does not explicitly handle clock dividers or counters. The document mentions that the DSL should assume a fixed one value per input stream per clock cycle, and the code is written with this assumption.
+
+\section{Demonstration and Comparison to Other HDLs}
+\subsection{Roberts Cross Edge Detector}
+The Roberts Cross edge detector is an edge detector which is particularly well-suited for edge detection in a live image stream with a low degree of noise due to its simplicity and low hardware usage. listing \ref{python.roberts_cross} shows an implementation in Flow DSL, and listing \ref{verilog.roberts_cross} shows the Verilog alternative. It uses two kernels of size 2x2, and the difference is calculated to detect the edges.
+
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python3}
+screen_height = 480
+
+r_in = gr.istream(8)
+g_in = gr.istream(8)
+b_in = gr.istream(8)
+
+def roberts_cross(in0: Node) -> Node:
+  last = in0.offset(-1)
+  prev_row = in0.offset(-screen_height)
+  prev_row_last = last.offset(-screen_height)
+  gx = prev_row_last - in0
+  gy = prev_row - last
+  return gx + gy
+
+r_out = gr.ostream(roberts_cross(r_in), 8)
+g_out = gr.ostream(roberts_cross(g_in), 8)
+b_out = gr.ostream(roberts_cross(b_in), 8)
+  \end{minted}
+  \caption{Flow DSL implementation of a Roberts Cross edge detector}\label{python.roberts_cross}
+\end{listing}
+
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{verilog}
+module RobertsCrossEdgeDetector (
+  input [7:0] r_in, g_in, b_in,
+  input clk, reset_n,
+  output reg [7:0] r_out, g_out, b_out
+);
+  reg [7:0] r_line_buffer_0[479:0], r_line_buffer_1[479:0];
+  reg [7:0] g_line_buffer_0[479:0], g_line_buffer_1[479:0];
+  reg [7:0] b_line_buffer_0[479:0], b_line_buffer_1[479:0];
+  wire [7:0] r_px00, r_px01, r_px10, r_px11;
+  wire [7:0] g_px00, g_px01, g_px10, g_px11;
+  wire [7:0] b_px00, b_px01, b_px10, b_px11;
+  reg [8:0] pos = 0;
+  assign r_px00 = r_line_buffer_0[pos[8:0]];
+  assign r_px01 = r_line_buffer_0[pos[8:0] + 1];
+  assign r_px10 = r_line_buffer_1[pos[8:0]];
+  assign r_px11 = r_line_buffer_1[pos[8:0] + 1];
+  assign g_px00 = g_line_buffer_0[pos[8:0]];
+  assign g_px01 = g_line_buffer_0[pos[8:0] + 1];
+  assign g_px10 = g_line_buffer_1[pos[8:0]];
+  assign g_px11 = g_line_buffer_1[pos[8:0] + 1];
+  assign b_px00 = b_line_buffer_0[pos[8:0]];
+  assign b_px01 = b_line_buffer_0[pos[8:0] + 1];
+  assign b_px10 = b_line_buffer_1[pos[8:0]];
+  assign b_px11 = b_line_buffer_1[pos[8:0] + 1];
+
+  integer i;
+  always @(posedge clk) begin
+    r_line_buffer_1[pos[8:0]] <= r_in;
+    g_line_buffer_1[pos[8:0]] <= g_in;
+    b_line_buffer_1[pos[8:0]] <= b_in;
+    if (pos[8:0] == 479) begin
+      for (i = 0; i < 480; i = i+1) begin
+          r_line_buffer_0[i] <= r_line_buffer_1[i];
+          g_line_buffer_0[i] <= g_line_buffer_1[i];
+          b_line_buffer_0[i] <= b_line_buffer_1[i];
+      end
+      pos <= 0;
+    end
+    else begin
+      r_out <= ((r_px00 >= r_px11) ? (r_px00 - r_px11) : (r_px11 - r_px00)) + ((r_px10 >= r_px01) ? (r_px10 - r_px01) : (r_px01 - r_px10));
+      g_out <= ((g_px00 >= g_px11) ? (g_px00 - g_px11) : (g_px11 - g_px00)) + ((g_px10 >= g_px01) ? (g_px10 - g_px01) : (g_px01 - g_px10));
+      b_out <= ((b_px00 >= b_px11) ? (b_px00 - b_px11) : (b_px11 - b_px00)) + ((b_px10 >= b_px01) ? (b_px10 - b_px01) : (b_px01 - b_px10));
+      pos <= pos + 1;
+    end
+  end
+endmodule
+  \end{minted}
+  \caption{Verilog implementation of a Roberts Cross edge detector}\label{verilog.roberts_cross}
+\end{listing}
+
+When compiled to logic using using the `Analysis \& Elaboration' feature of Intel's `Quartus Prime'\cite{quartus}, but before the `place and route' compilation stage to avoid wiring between assigned IO pins and other FPGA-specific limitations, the design produced using the Flow DSL used 236 logic elements, 225 registers and 11,424 memory bits. In identical conditions, the Verilog design used 40,472 logic elements, 23,107 registers and 12,288 memory bits. While this may seem extreme at first, rather than being an accurate measure of how much more efficient in terms of resource usge Flow DSL is than Verilog, it exposes inefficiencies which are easily missed in the Verilog. Consider the if/else statements on line 31 of listing \ref{verilog.roberts_cross} \hyphen{} each statement within this will produce a MUX in the form \lstinline|line_buffer_0[i] <= pos[8:0] == 479?  line_buffer_1[i] : line_buffer_0[i];|. As there are 480 pixels per line and three colours per pixels, this alone will use 1,440 logic elements \hyphen{} already more than Flow DSL. The vast majority of the logic element usage, however, comes from indexing the row buffer directly, as in the line \lstinline|line_buffer_0[pos[8:0] + 1]|. This line will initially create a MUX for each of the twelve pixels to consider. Each of these MUXes will use around 3000 logic elements, resulting in a highly inefficient end product.
+
+While the throughput of the designs were identical \hyphen{} the requirement of one pixel per clock ensures this, the latency of the design produced by Flow DSL was three clock cycles as opposed to the two from the plain Verilog. This is offset by the maximum clock speed ($F_{max}$) when using a DE10-Lite development kit \cite{terasic} being 69.71MHz for the Verilog design and 347.95MHz for the Flow DSL design due to the setup and hold time limitations for the Verilog design being increased by all the logic which slows propagation through the unneeded MUXes.
+
+Considering improved Verilog code, such as that in listing \ref{verilog.roberts_cross.improved}, which uses modules for reusability and the same buffering system as the code generated by Flow DSL \hyphen{} even if this is less immediately obvious as it is decoupled from the concept of a line in an image, it is similarly efficient in terms of resource usage. The new Verilog code uses 286 logic elements, 21.2\% more than the code generated by FlowDSL, this is offset by handwritten Verilog fewer registers at 81 compared to Flow DSL's 225, meaning Flow DSL used 178\% more registers than handwritten Verilog. The number of memory bits is identical at 11,424. The $F_{max}$ for the DE10-Lite is again lower than that generated by Flow DSL at 204.79MHz \hyphen{} this is only 58.9\% of the clock rate of the design generated by Flow DSL. This shows that Flow DSL's focus on long pipelines has a positive impact when compared to Verilog code which does not focus on long pipelines.
+
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{verilog}
+module RobertsCross(
+   input [7:0] in,
+   input clk, reset_n,
+   output reg [7:0] out
+);
+  reg [7:0] line_buffer[480:0];
+  wire [7:0] px00 = line_buffer[480],
+             px01 = line_buffer[479],
+             px10 = line_buffer[0],
+             px11 = in;
+  integer j;
+  always @(posedge clk) begin
+    line_buffer[0] <= in;
+    for (j = 0; j < 479; j = j+1) begin
+      line_buffer[j+1] <= line_buffer[j];
+    end
+   out <= ((px00 >= px11) ? (px00 - px11) : (px11 - px00)) + ((px10 >= px01) ? (px10 - px01) : (px01 - px10));
+  end
+endmodule
+
+module GeneratedModule (
+    input [7:0] r_in, g_in, b_in,
+    input clk, reset_n,
+    output [7:0] r_out, g_out, b_out
+);
+  RobertsCross red(
+  .in(r_in),
+  .clk(clk),
+  .reset_n(reset_n),
+  .out(r_out)
+  );
+  RobertsCross green(
+  .in(g_in),
+  .clk(clk),
+  .reset_n(reset_n),
+  .out(g_out)
+  );
+  RobertsCross blue(
+  .in(b_in),
+  .clk(clk),
+  .reset_n(reset_n),
+  .out(b_out)
+  );
+endmodule
+\end{minted}
+  \caption{Improved Verilog implementation of a Roberts Cross edge detector}\label{verilog.roberts_cross.improved}
+\end{listing}
+
+Writing the equivalent code to Flow DSL in Chisel, with the same timing \hyphen{} 3 clock cycles of latency, as in listing \ref{chisel.robertscross} and generating Verilog would be expected to produce similar code to handcrafting Verilog, as Chisel does not optimise RTL, however the code generated by Chisel was actually more efficient than Verilog, using 232 logic elements to Verilog's 286 and 201 registers to Verilog's 81. These figures are both also lower than Flow DSL's 236 and 225 respectively. The $F_{max}$ of the Chisel generated code was 315.06MHz \hyphen{} slower than Flow DSL's 347.95 but still must faster than Verilog. The reduced number of registers is in part due to mis-optimisation in Flow DSL \hyphen{} it performs an optimisation to reduce buffering in the calculation of \lstinline|gx| and so uses the input directly for both \lstinline|gx| and \lstinline|gy|, adding a buffer after \lstinline|gx| and removing one before. As the result of offsetting \lstinline|in0| by 481 is still used by \lstinline|gy|, this `optimisation' to the calculation of \lstinline|gx| actually adds a buffer compared to not applying it, as it becomes necessary to store the result of \lstinline|gy| for an extra clock cycle. To avoid this, it would be beneficial to add a case to catch this in Flow DSL.
+
+The simplicity of Chisel is also closer to that of Flow DSL \hyphen{} as it has the \lstinline|RegNext| type it allows for far easier construction of buffers than Verilog. This simplicity makes construction of pipelined designs easier.
+
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{scala}
+class GeneratedModule extends chisel3.Module {
+  val io = IO(new Bundle {
+    val r_in = Input(UInt(8.W))
+    val g_in = Input(UInt(8.W))
+    val b_in = Input(UInt(8.W))
+    val r_out = Output(UInt(8.W))
+    val g_out = Output(UInt(8.W))
+    val b_out = Output(UInt(8.W))
+  })
+  import io._
+  final val ScreenWidth = 480
+  def genCross(in: UInt): UInt = {
+    lazy val delays: LazyList[UInt] =
+      in +: LazyList.from(0).map(i => RegNext(delays(i)))
+    val gx = RegNext((delays(ScreenWidth + 1) - delays(0)).asSInt)
+    val gy = RegNext((delays(1) - delays(ScreenWidth)).asSInt)
+    (RegNext{gx.abs} + RegNext(gy.abs)).asUInt
+  }
+  r_out := RegNext(genCross(r_in))
+  g_out := RegNext(genCross(g_in))
+  b_out := RegNext(genCross(b_in))
+}
+\end{minted}
+  \caption{Chisel implementation of a Roberts Cross edge detector}\label{chisel.robertscross}
+\end{listing}
+
+\subsection{General Purpose Kernels}
+Something which is not possible in languages such as Verilog, but is possible in Flow DSL, is the creation of a general purpose image processing kernel applier. This can result is extremely low effort required to modify designs in terms of size, kernel parameters and number of kernels. An implementation is given in listing \ref{python.kernel}. As this is not possible in Verilog, a comparison implementation cannot be given \hyphen{} it would be necessary to write a new implementation almost from scratch for each kernel.
+
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python}
+def apply_kernel(
+    gr: Graph, in0: Node, kernel: list[list[int]], divisor: int = None
+) -> Node:
+  assert len(kernel)  > 0
+  assert len(kernel[0]) > 0
+  mid_y = (len(kernel) + 1) // 2
+  mid_x = (len(kernel[0]) + 1) // 2
+  divisor = sum(map(sum, kernel))
+  out = None
+  for (i, x) in enumerate(kernel):
+    for (j, y) in enumerate(x):
+      if y != 0:
+        offset_by = (i - mid_y) * screen_width + (j - mid_x)
+        node = in0.offset(offset_by) * gr.const(y)
+        if out != None:
+          out = out + node
+        else:
+          out = node
+  if out != None:
+    if divisor:
+      return out / gr.const(divisor)
+    else:
+      return out
+  else:
+    return gr.const(0)
+  \end{minted}
+  \caption{Application of a generic kernel in Flow DSL}\label{python.kernel}
+\end{listing}
+
+
+\subsection{Alteration of Existing Code}
+In Flow DSL, alteration of existing code is inherently simple due to the high-level nature of the dataflow graphs and the ability to declare and invoke Python functions. Using the example of the Roberts Cross in listing \ref{python.roberts_cross}, changing the image width merely requires updating the \lstinline|screen_width| variable. The underlying dataflow graph remains the same other than the buffer length, and the compiler handles all buffering changes internally. More major alterations are also simple in Flow DSL; modifying the kernel or switching to a different image processing algorithm, such as the Gaussian Blur operator, as shown listing \ref{python.gb.kernel}, can be done with minimal changes to the code for a Roberts Cross operator, as seen in listing \ref{python.rc.kernel}. The \lstinline|apply_kernel| function demonstrated in listing \ref{python.kernel} is a prime example of adaptability, as it allows for the application of arbitrary convolution kernels with little effort.
+
+On the other hand, in Verilog, alteration of existing code in similar manners often requires more extensive modifications. Due to the lower-level nature of Verilog, handling different image sizes might necessitate changes in buffer sizes, indexing, and control logic. Adaptability in Verilog is also more challenging. Changing the kernel or algorithm usually requires a deeper understanding of the hardware and involves modifying multiple sections of the code, including the arithmetic operations and control structures. This can be error-prone and time-consuming.
+
+As Chisel allows dataflow-like operations in terms of `RegNext', a similar kernel application function would be possible to write in Chisel, however it is worth noting that as Chisel only allows accessing the last value using `RegNext', buffering LazyLists would need to be created to input buffer chains such as though automatically generated by Flow DSL when changing the level of, or introducing, buffering.
+
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python}
+def roberts_cross(gr: Graph, in0: Node):
+  a = apply_kernel(gr, in0, [[-1, 0], [0, -1]])
+  b = apply_kernel(gr, in0, [[0, 1], [1, 0]])
+  return abs(a) + abs(b)
+  \end{minted}
+  \caption{Application of a Roberts Cross using the `apply kernel' function}\label{python.rc.kernel}
+\end{listing}
+
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python}
+def gaussian_blur(gr: Graph, in0: Node):
+  return (
+    apply_kernel(gr, in0, [[1, 2, 1],
+                           [2, 4, 2],
+                           [1, 2, 1]], 16)
+  )
+  \end{minted}
+  \caption{Application of a Gaussian Blur using the `apply kernel' function}\label{python.gb.kernel}
+\end{listing}
+
+\par\noindent\hrulefill\par
+
+In this section, Flow DSL was compared in terms of both performance and modifiability to Verilog and Chisel, and against the requirements. It was found to be relatively performant, especially compared to hand-written Verilog, and met most of the requirements.

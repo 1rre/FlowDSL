@@ -1,0 +1,108 @@
+\chapter{Project Plan}\label{chap:project-plan}
+
+\section{Objectives}
+We define the following objectives for the project:
+
+\subsection{Time-Insensitive Dataflow Graph Concept}
+Rather than the idea of building dataflow graphs on pure inputs and outputs at a given time or an offset of that time, we aim to add a concept of lookahead, allowing data to be cycled back to earlier in the graph. This concept of time will be scoped at the module level, with 1 unit of time not necessarily being a single clock cycle except for in the case of the input stream \hyphen{} this allows for modules which run at lower throughputs than the IO stream. An example of such a module would be a module to sum the items at odd indices at a vector \hyphen{} for every two elements that enter the stream, the module will accept a single input, allowing its graph depth to be twice what it otherwise could.
+\\
+Currently, dataflow graphs such as those in MaxJ \cite{maxj} or put forward by Rinker et al. \cite{920828} operate at a single time point, namely the clock cycle at which the ``current'' data item entered the start of the graph, with previous or future data being accessed through offsets of the stream. By adding the concept that time will advance as data flows through the graph, and that the value of a node's output an arbitrary number of clock cycles ago can be known before the node's current output, we can significantly simplify the concept of cycles and windowed operations. A comparison of the 2 concepts, where each operation, including the throughput rate of the stream, takes 1 unit of time, are given in Figures \ref{maxj.mvg-avg} to \ref{dataflow.pseudocode.mvg-avg}.
+
+\begin{figure}[H]
+  \caption{MaxJ Implementation of a Moving Average}
+  \label{maxj.mvg-avg}
+  \begin{minted}
+  int AVG_WINDOW = 4;
+  DFEVar x = io.input("x", dfeInt(32));
+  DFEVar next = constant.var(dfeInt(32), 0);
+  for (int i = 0; i < AVG_WINDOW; i++) {
+    next = next + stream.offset(x, -i);
+  }
+  DFEVar mean = next / AVG_WINDOW;
+  io.output("mean", mean, dfeInt(32));
+  \end{minted}
+\end{figure}
+
+\begin{figure}[H]
+  \caption{Dataflow Graph for MaxJ Implementation of a Moving Average}
+  \label{dataflow.maxj.mvg-avg}
+  \centering
+  \begin{tikzpicture}[node distance=1cm,circuit ee IEC]
+    % below n
+    \node (n) {$[x_{-n}, ..., x_{-1}, x_0, x_1, ..., x_{n}]$};
+    \node (buf_0) [buf,below left=of n]{nop};
+    \node (buf_1) [buf,below=of buf_0]{nop};
+    \node (buf_2) [buf,below=of buf_1]{nop};
+    \node (add_1) [add,below=of n,yshift=-1cm];
+    \node (add_2) [add,below=of add_1];
+    \node (add_3) [add,below=of add_2];
+    \node (div_0) [div_4,below =of add_3];
+    \node (y) [below=of div_0] {$[y_{-n}, ..., y_{-1}, y_0, y_1, ..., y_{n}]$};
+    \draw[->](n)--(buf_0);
+    \draw[->](buf_0)--(buf_1);
+    \draw[->](buf_1)--(buf_2);
+    \draw[->](buf_0)--(add_1);
+    \draw[->](buf_1)--(add_2);
+    \draw[->](buf_2)--(add_3);
+    \draw[->](n)--(add_1);
+    \draw[->](add_1)--(add_2);
+    \draw[->](add_2)--(add_3);
+    \draw[->](add_3)--(div_0);
+    \draw[->](div_0)--(y);
+  \end{tikzpicture}
+\end{figure}
+
+\begin{figure}[H]
+  \caption{Pseudocode Implementation of a Moving Average}
+  \label{pseudocode.mvg-avg}
+  \begin{minted}
+  int AVG_WINDOW = 4;
+  DFEVar x = io.input("x", dfeInt(32));
+  DFEVar total = var("total", dfeInt(32));
+  DFEVar mean = io.output("mean", dfeInt(32));
+  total := stream.offset(total, -1) + stream.offset(x, -AVG_WINDOW) - x;
+  mean := total / AVG_WINDOW;
+  \end{minted}
+\end{figure}
+\begin{figure}[H]
+  \caption{Dataflow Graph for Pseudocode Implementation of a Moving Average}
+  \label{dataflow.pseudocode.mvg-avg}
+  \centering
+  \begin{tikzpicture}[node distance=1cm,circuit ee IEC]
+    % below n
+    \node (n) {$[x_{-n}, ..., x_{-1}, x_0, x_1, ..., x_{n}]$};
+    \node (buf_0) [buf,below left=of n]{nop};
+    \node (buf_1) [buf,below=of buf_0]{nop};
+    \node (buf_2) [buf,below=of buf_1]{nop};
+    \node (add_0) [add, below=of n,yshift=-1cm];
+    \node (buf_3) [buf,below right=of add_0]{nop};
+    \node (sub_0) [sub, below left=of buf_3];
+    \node (div_0) [div_4,below=of sub_0];
+    \node (y) [below=of div_0] {$[y_{-n}, ..., y_{-1}, y_0, y_1, ..., y_{n}]$};
+    \draw[->](n)--(buf_0);
+    \draw[->](buf_0)--(buf_1);
+    \draw[->](buf_1)--(buf_2);
+    \draw[->](n)--(add_0);
+    \draw[->](buf_3)--(add_0);
+    \draw[->](add_0)--(sub_0);
+    \draw[->](buf_2)--(sub_0);
+    \draw[->](sub_0)--(div_0);
+    \draw[->](sub_0)--(buf_3);
+    \draw[->](div_0)--(y);
+  \end{tikzpicture}
+\end{figure}
+By changing the way in which variables are declared, allowing a variable to be assigned to a permutation of itself at a different time, we can easily write a cycle into our program - something which seems much harder to do with MaxJ; there may be a way to do this in MaxJ, but none of the programming guides I could find showed it. This is because Java, and MaxJ by extension, will not allow you to access a variable before it is initialised/allocated, despite the fact that there is no concept of variable allocation in hardware.
+
+\subsection{DSL Frontend}
+To be a useful system design tool, the input format for our tool must be more attractive than writing the same system at the register transfer level, eg. in Verilog. For this to be the case, a Domain-Specific Language should be created to allow for a programming experience which is tailored to static streaming dataflow hardware. This DSL could be either embedded in another language such as Scala or Python, similar to Spatial, or created as a standalone language as with Single-Assignment C.
+\\~\\
+Creating static streaming hardware is similar to functional programming by nature, with the hardware applying one of the common vector functions \lstinline|map|, \lstinline|reduce|, \lstinline|fold| or \lstinline|scan| to the input stream, and the concept of a memory address not being present - a variable is simply itself. This relates to MaxJ's (potential?) flaw of not being able to refer to a variable in its own declaration. Because of this, it may make more sense to use a functional language as the basis for the DSL than an imperative language, however the lack of well-supported IR frameworks may result in this being much more complex than using C++ or Python.
+
+\subsection{IR Framework Dialect}
+Using an intermediate representation (IR) framework such as xDSL \cite{xdsl-home} or MLIR \cite{mlir} allows for greater optimisation and faster development than writing a compiler backend from scratch. We therefore aim to create a dialect in such a framework, which allows a static streaming dataflow graph to be specified, processed and optimised before the target HDL is emitted.
+
+\subsection{Dialectal Processing}
+The DSL should allow for modular design of dataflow graphs, however issues may arise if the timing of an instantiated module does not match the timing of its parent module, or if parallel graphs have different timings. To rectify these issues, the code written in the IR framework dialect must be processed and retimed. This can be acheived either by merging nodes of certain branches which take many clock cycles, or introducing buffering to others. In the case of buffering, it may be possible to improve the timing constraints of the system by splitting a single node into multiple nodes.
+
+\subsection{HDL Emission}
+In order to allow designs to run on hardware or be simulated, a bitstream representing the hardware must be created. As creating this for every FPGA variant/ASIC manufacturer would be a daunting task, it is simpler to emit an existing low-level hardware development language (HDL). The options for this include, but are not limited to: Verilog, VHDL, LLHD, Circt's \textit{Calyx} dialect and FIRRTL. An evaluation of these options should be performed, however at the present I believe that emitting LLHD through the \textit{Calyx} dialect is the best option due to its optimisation steps which are relevant to the project.

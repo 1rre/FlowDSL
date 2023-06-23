@@ -1,0 +1,6 @@
+* Can stream offset be positive?
+** I don't like the idea of accessing future values, it messes with cycles but may be possible?
+** This is because if we use the future value of an old input we can just buffer everything, but then we'd be running a deficit we'd need to catch up?
+** It could also be possible via re-balancing the tree, however it could behave weirdly if the rebalance extends into an input stream?
+** I can't actually think of a situation where you'd want to use next rather than previous though...
+

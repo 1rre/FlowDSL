@@ -1,0 +1,27 @@
+\chapter{Related Work (TO BE REMOVED)}
+\section{Existing Tools}
+This section aims to introduce the reader to some tools which perform similar roles to the one presented in this paper.
+
+\noindent
+\textbf{Note:} The summaries are short as I have not finished evaluating these projects \& I have little documentation for MaxJ, therefore expect much more detail in the final report.
+
+\subsection{MaxJ}
+MaxJ is an existing DSL embedded in Java for producing hardware designs based on dataflow graphs. The available documentation for MaxJ is lacking, however it is the most similar commercially available tool to what we aim to produce.
+
+\subsection{Spatial}
+Spatial is a DSL embedded in Scala for creating pipelined, parallel or streaming systems. Spatial allows system designers to program their system at a very high level, with many optimisation and analysis steps in the compiler.
+
+\subsection{ROCCC}
+ROCCC is a commercial tool originally developed at Univ. Colorado Riverside which compiles a subset of C to VHDL, with a focus on high throughput streaming designs \cite{5474060}. It allows for fine-grained control of throughput, latency and applies optimisations to maximise these as well as maximise the clock speed and minimise off-chip memory accesses \& the number of logic elements.
+
+\subsection{CIRCT}
+CIRCT \cite{circt} is a low-level extension of MLIR \cite{mlir} with a focus on targeting hardware. While there are optimisations for pipelined hardware within CIRCT, via an MLIR dialect called \textit{Pipeline}, the optimisations applied by the \textit{Pipeline} dialect are on a higher level than those which can be applied to streaming hardware due to the ability to reorder loops, introduce delays and the ability to have control over the throughput - something which is not always possible for streaming hardware, eg. in the case of VGA output. To modify \textit{Pipeline} for these purposes would require significant changes and potentially clock division, therefore it is not suitable as a basis for the project. Another CIRCT dialect, \textit{Calyx}, is closer to FIRRTL or Verilog and performs operations based on hardware reuse and expression/constant folding, which are useful to this project. It therefore makes sense to integrate this dialect into the project.
+
+\section{Related Research}
+\subsection{An automated process for compiling dataflow graphs
+into reconfigurable hardware (2001)}
+In 2001, R. Rinker et al. \cite{920828} considered an optimising hardware compiler for a variant of C known as Single Assignment C \cite{sa-c}. This compiler used dataflow graphs as an intermediate representation in its compilation process, before emitting VHDL. While there are similarities to my project in that it is compiling dataflow graphs to hardware, the fact that the dataflow graphs are an intermediate representation results in not only more freedom when retiming, but also a less modular design than tools such as MaxJ.
+
+\subsubsection{Single Assignment C}
+Single Assignment C \cite{sa-c}, as used by Rinker et al. \cite{920828}, is a variant of C without pointers and recursion. While it was originally created for vector processing, it is an early example of a language used for high level synthesis due to the similarities between the two domains. The lack of pointers and recursion are important for HLS, as there is no concept of a memory address of a hardware register, nor is there a stack to grow during recursion: a single scoped variable can only hold a single value at a time.
+

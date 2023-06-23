@@ -1,0 +1,577 @@
+\chapter{Implementation}\label{chap:compilation}
+THis section aims to introduce and explain the implementation details of Flow DSL and the motivation behind this.
+
+\section{Introduction}
+Flow DSL is implemented in Python atop xDSL. While at time a strong and powerful type system such as that in Scala 3, OCaml or F\# would have been useful \hyphen{} there are a lot of uses of \lstinline|isinstance| which would've been more pleasant to deal with given a stronger type system and plenty of `errors' from PyLint due to its lack of recognition of \lstinline|hasattr|, as well as the lack of polymorphism, however at other times it was incredibly useful to have the simplicity and modularity of Python. The ability to leverage xDSL was also incredibly valuable \hyphen{} if the project were to be done in Scala 3, OCaml or F\# it is likely that either no IR framework or an inferior one would've been needed to be used.
+
+\section{Design Features}
+
+\subsection{Variable Naming}\label{varname}
+The Python \lstinline|varname| package is used to capture Python variable names with the intention of improving the readability of the generated HDL code. Using \lstinline|varname| in combination with \lstinline|Graph.forward_ref(str)| also allows for code to be written in an intuitive way, similar to how one would write Python for interpretation, rather than having to access variables with a string ID each time. Having \lstinline|Graph.forward_ref(str)| as the only user-facing function to deal with a variable by a string name, rather than a direct reference, minimises the confusion which may occur when a user shadows a variable or overwrites it within Python, as in as in listing \ref{python.varname.loop}. As Python's mutability of variables fundamentally contradicts the expectation of immutability of a named variable in Verilog and other single-assignment languages, a workaround had to be created for the case where the user were to assign multiple variables to the same name. While this requires a workaround on the backend, it is worth noting that this is more compatible with Python than enforcing single assignment to a name. An example of this is a for loop where the user is creating a pipeline where the same operation is applied iteratively to a given value. While a functionally identical version of the method could be achieved \lstinline|list.append| with the added benefit of variables being accessible outside of the iterative process, this is far less intuitive as a construct within the language.
+
+\section{xDSL Dialects}
+The DSL backend, which is built atop xDSL, consists of four dialects. These are, in order of invocation, \lstinline|flow_initial|, \lstinline|flow2|, \lstinline|flow_timed| \& \lstinline|hard_flow|. Each layer decended by advancing a dialect adds information to take the program closer to the register transfer level.
+
+\section{Compiler Passes}
+\subsection{Graph to xDSL}\label{graph.2.xdsl}
+The first compilation pass is not implemented with xDSL's \lstinline|ModulePass| class as the representation uses simply Python classes, extracted as they are declared using the \lstinline|varname| package and a map to keep track of nodes to names and references. `Anonymous', or unnamed, variables, such as \lstinline|y.offset(1)| in \lstinline|x + y.offset(1)| are given a random unique identifier according to Python's \lstinline|uuid| module.
+
+While it would be possible to write the graph definitions such that the initial version of the xDSL dialect is generated directly when the interpreter executes the line which declares the code, using a decoupled front end leaves options for different backends to be added in the future. This also allows for easier control over the names and forward references, as such operations are not well suited for xDSL's \lstinline|RewritePattern| class to handle. Even then, however, the \lstinline|flow_initial| does not reference by value, it instead references by name \hyphen{} no results of computations are used. This means that compiler optimisation passes are not easy to implement in this stage.
+
+At this point bit widths are only assigned to the \lstinline|IStream|, \lstinline|OStream|, \lstinline|slice| and \lstinline|Const| operations and their results using the \lstinline|flow_initial.wnode| attribute, rather than the \lstinline|flow_initial.node| attribute which does not not carry a width. An example of the \lstinline|flow_initial| dialect is shown in listing \ref{dialect.flow_initial}.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\makeatletter
+\AtBeginEnvironment{minted}{\dontdofcolorbox}
+\def\dontdofcolorbox{\renewcommand\fcolorbox[4][]{##4}}
+\makeatother
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{llvm}
+%0 = "flow_initial.istream"() : () -> !flow_initial.wnode<#int<32>, "in0">
+%1 = "flow_initial.istream"() : () -> !flow_initial.wnode<#int<32>, "in1">
+%2 = "flow_initial.binop"() {"op" = "*", "left" = "in0", "right" = "in1"} : () -> !flow_initial.node<"current">
+%3 = "flow_initial.binop"() {"op" = "+", "left" = "#1#", "right" = "current"} : () -> !flow_initial.node<"sum_out">
+%4 = "flow_initial.offset"() {"node" = "sum_out", "offset" = #int<-1>} : () -> !flow_initial.node<"#1#">
+%5 = "flow_initial.ostream"() {"node" = "sum_out"} : () -> !flow_initial.wnode<#int<32>, "out0">  
+  \end{minted}
+  \cprotect\caption{An implementation of an inner product in the \lstinline|flow_initial| dialect}
+  \label{dialect.flow_initial}
+\end{listing}
+
+\subsection{Reference Matching}
+To convert the operations within the initial dialect from referencing by a variable by its string name to referencing its xDSL \lstinline|SSAValue| (Single Static Assignment Value) a new dialect, \lstinline|flow2|, which is similar in most ways to \lstinline|flow_initial| is used, however references other nodes by their SSAValues. As can be seen in listing \ref{dialect.flow_2}, xDSL's printer does not expect forward references, and therefore does not assign a SSAValue to each result before starting printing, instead assigning SSAValues during printing. This means that forward references appear to xDSL as use of results which are not added to the IR. While it would be possible to fix this, the xDSL printer is only used for debugging and an entirely new printer was defined in section \ref{sect:compiling.flow_printer}. An indication of the above program with properly referenced \lstinline|SSAValue|s can be seen below in listing \ref{dialect.flow_2.fixed}, and in all future xDSL snippets, however note that these have been modified from the verbatim output only to remove false positives on undeclared variables.
+
+Only non-generated names are kept between \lstinline|flow_initial| and \lstinline|flow2| \hyphen{} this is because nodes may be added or removed during the compilation process, therefore names must be created for unknown nodes at the end anyway, and it makes sense to have these be consistent throughout.
+
+\makeatletter
+\AtBeginEnvironment{minted}{\dontdofcolorbox}
+\def\dontdofcolorbox{\renewcommand\fcolorbox[4][]{##4}}
+\makeatother
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{llvm}
+%0 = "flow2.istream"() {"uid" = "in0"} : () -> !flow2.wnode<#int<32>>
+%1 = "flow2.istream"() {"uid" = "in1"} : () -> !flow2.wnode<#int<32>>
+%2 = "flow2.binop"(%0, %1) {"op" = "*", "uid" = "current"} : (!flow2.wnode<#int<32>>, !flow2.wnode<#int<32>>) -> !flow2.node
+%3 = "flow2.binop"(%2, %<UNKNOWN>) {"op" = "+", "uid" = "sum_out"} : (!flow2.node, !flow2.node) -> !flow2.node
+-----------------------^^^^^^^^^^----------------------------------------------------------------
+| ERROR: SSAValue is not part of the IR, are you sure all operations are added before their uses?
+-------------------------------------------------------------------------------------------------
+%4 = "flow2.offset"(%3) {"offset" = #int<-1>} : (!flow2.node) -> !flow2.node
+%5 = "flow2.ostream"(%3) {"uid" = "out0"} : (!flow2.node) -> !flow2.wnode<#int<32>>wnode<#int<32>>
+  \end{minted}
+  \cprotect\caption{An implementation of an inner product in the \lstinline|flow_2| dialect}\label{dialect.flow_2}
+\end{listing}
+
+\makeatletter
+\AtBeginEnvironment{minted}{\dontdofcolorbox}
+\def\dontdofcolorbox{\renewcommand\fcolorbox[4][]{##4}}
+\makeatother
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{llvm}
+%0 = "flow2.istream"() {"uid" = "in0"} : () -> !flow2.wnode<#int<32>>
+%1 = "flow2.istream"() {"uid" = "in1"} : () -> !flow2.wnode<#int<32>>
+%2 = "flow2.binop"(%0, %1) {"op" = "*", "uid" = "current"} : (!flow2.wnode<#int<32>>, !flow2.wnode<#int<32>>) -> !flow2.node
+%3 = "flow2.binop"(%2, %4) {"op" = "+", "uid" = "sum_out"} : (!flow2.node, !flow2.node) -> !flow2.node
+%4 = "flow2.offset"(%3) {"offset" = #int<-1>} : (!flow2.node) -> !flow2.node
+%5 = "flow2.ostream"(%3) {"uid" = "out0"} : (!flow2.node) -> !flow2.wnode<#int<32>>
+  \end{minted}
+  \cprotect\caption{An implementation of an inner product in the \lstinline|flow_2| dialect, with errors fixed.}\label{dialect.flow_2.fixed}
+\end{listing}
+
+\subsubsection{Checking Names}\label{dialect.namecheck}
+To form the \lstinline|flow2| dialect from \lstinline|flow_initial|, the nodes referenced by name must be matched to the nodes which declare them. This is the role of the \lstinline|ReferenceMatching| `module pass' and the \lstinline|CheckNames| `rewrite patter'. Due to the potential existence of forward references, a dictionary mapping known names is passed to \lstinline|CheckNames| along with a list of nodes currently in the graph.
+
+A challenge is presented here by the xDSL framework specifying that a ``rewrite pattern' should be “A side-effect free rewrite pattern matching on a DAG.'' While a truly side-effect free implementation would theoretically be possible by storing the \lstinline|ModuleOp| object which encapsulates all active nodes in the dataflow graph, and searching though each of the nodes within the module for the one with the name which matched the current operand, this would both require keeping temporary names for longer than needed \hyphen{} why this is undesirable is covered in section \ref{naming}, and be wildly inefficient as it would require a linear search for each operand in the graph, likely multiple times given all operands of a node must have already been converted to a `Flow 2 Node' for the node itself to be converted. There is also the consideration that cyclic dataflow graphs fundamentally breach the requirement for the xDSL representation of the program to be a DAG (Directed Acyclic Graph) \hyphen{} this is simply not possible given the fact that cyclic dataflow graphs are by definition not DAGs. Given one of the conditions \hyphen{} and the condition which is more liable to prove an issue due to future changes to xDSL's internals at that, is being ignored, it is not unreasonable to ignore the condition for a lack of side-effects, so long as the side-effects don't reach beyond the internal data of the rewrite pattern class.
+
+To rewrite the \lstinline|flow_initial| dialect, therefore, a dictionary of node names to nodes is created. Using the \lstinline|PatternRewriteWalker| class, each operation within the graph is iterated, with any instances of \lstinline|flow_initial| nodes being rewritten as the equivalent \lstinline|flow2| nodes. The new \lstinline|flow2| nodes are added to the dictionary to replace the old \lstinline|flow_initial| nodes, as the nodes in the dictionary are used to resolve operands, which may be forward or backward references. xDSL currently handles forward references without much extra external effort to ensure this, however as it is an out-of-spec usage there are no guarantees this will continue in the future. Speaking with the xDSL team has confirmed that there is not a better way to do this other than creating a separate rewrite system which explicitly supports forward references and side effects, at which point it likely would have been just as useful to create an IR framework from scratch or use a different framework.
+
+\subsubsection{Dead Code Eliminator}
+The `Dead Code Eliminator' (DCE) module removes code which is inaccessible, or `dead'. In the context of dataflow programming, where there is no control flow to stop the propagation of values into certain paths, this means any nodes which aren't connected to both at least one input node and at least one output node. Without being connected to an input node or a constant value, there is no way for the nodes to get values \hyphen{} in Verilog these would result in a net of \lstinline|X| (uninitialised) or \lstinline|Z| (undriven) bits. If a node is not connected to any output nodes there is no way for its value to affect the output, therefore if we treat the dataflow graph as a black box, the node may as well not be there at all. While there are special cases, such as binary operations which only have a single operand, any node with at least one connection to an input and one connection to an output is considered `live' for the purposes of this project.
+
+Checking whether code is `dead' is more challenging in cyclic dataflow graphs than in software or acyclic dataflow graphs due to the existence of cycles. This means that the result of an operation will be used in the computation for that same operation at a later time, therefore a naïve dead code detector would identify that node as used, or worse, enter an infinite loop constantly checking the liveness of the cycle. To resolve this, the algorithms \ref{algo.dce.out}, for output nodes, and \ref{algo.dce.in}, for input nodes, are used. An intersection is then taken of the two sets to determine which nodes are `live'. Any nodes which are not `live' are removed from the graph.
+
+As xDSL expects graphs to be acyclic, attempting to remove a cyclic graph can present an issue. Nodes which use themselves as an operand cannot be deleted, as the protections in xDSL prevent the erasure of nodes which are still used, therefore the \lstinline|safe_erase| flag on the erasure must be set to false, allowing the node to be erased even if it still has uses. As all uses of the node will also be `dead' if the node itself is `dead', this is not an issue as all those nodes will be deleted by the DCE algorithm in the current cycle. As the \lstinline|drop_references| flag is set to true, all operations `upstream' of the node being erased will have the node removed as a use, even though the node is not safely deleted, therefore there will be no issues with nodes having `phantom' uses in later stages.
+
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{algorithm}[H]
+\caption{Dead Code Elimination: Collecting Outputs}\label{algo.dce.out}
+\begin{algorithmic}[1]
+\Function{AddDepsOut}{$op <: $ Flow2Node, $deps <: $ set[Flow2Node]}
+\If{$op \notin deps$}
+\State $deps \gets deps \cup op$
+\For{$next \gets op.operands$}
+\State \Call{AddDepsOut}{$next$, $deps$}
+\EndFor
+\EndIf
+\EndFunction
+\Function{GetOutputDeps}{$module <: $ ModuleOp} $ \rightarrow $ set[Flow2Node]
+\State $map \gets \emptyset$
+\For{$op \gets module.ops$}
+\If{$op <: $ OStream}
+\State \Call{AddDepsOut}{$op$, $map$}
+\EndIf
+\EndFor
+\Return $map$
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{algorithm}[H]
+\caption{Dead Code Elimination: Collecting Inputs}\label{algo.dce.in}
+\begin{algorithmic}[1]
+\Function{AddDepsIn}{$op <: $ Flow2Node, $deps <: $ set[Flow2Node]}
+\If{$op \notin deps$}
+\State $deps \gets deps \cup op$
+\For{$next \gets op.uses$}
+\State \Call{AddDepsIn}{$next$, $deps$}
+\EndFor
+\EndIf
+\EndFunction
+\Function{GetInputDeps}{$module <: $ ModuleOp} $ \rightarrow $ set[Flow2Node]
+\State $map \gets \emptyset$
+\For{$op \gets module.ops$}
+\If{$op <: $ Const $ \vee $ IStream}
+\State \Call{AddDepsIn}{$op$, $map$}
+\EndIf
+\EndFor
+\Return $map$
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+\subsection{Flow2 Optimisations}
+The `Deduplicator' module pass works on the \lstinline|flow_2| xDSL dialect and performs the bulk of the compiler optimisations. This is because optimisation after timing has been added to the system would result in the system being out of sync or having additional buffering. Few further optimisations could be made possible as a result of introducing timing \hyphen{} most of these would be relating to mutually exclusive bits, which is an optimisation which is not carried out anyway due to the expectation of all nodes of one input per clock cycle. This module pass consists of an `Offset Renamer', `Offset Replacer' and `Expression Eliminator'. As many of the rewrite patterns in this module pass can uncover more optimisations for another rewrite pattern, for instance the `Offset Replacer' may move an offset across a binary operation, allowing the `Offset Renamer' to merge it with another offset which was applied to the binary operation, each of the patterns are applied sequentially until none of them make any changes. While this would lead to an infinite loop if the rewrite patterns repeatedly made and undid each others' changes, for any well defined input the graph will settle and the loop will terminate.
+
+\subsubsection{Offset Renamer}
+Consider the code in listing \ref{optimisation.offset_rm} in the Flow DSL. This code repeatedly applies offsets of one clock cycle to an offset node, rather than offsetting from a non-buffer node \hyphen{} in this case the istream node. This can make cycle detection and timing harder by convoluting the xDSL \lstinline|uses| and \lstinline|operands| systems. By writing a rewrite rule which applies only to offsets which operate on an offset, any dual offsets can be eliminated to ensure all offsets apply only to a logic node, rather than buffering node. This will allow for the same buffers to be used for multiple offsets and for other optimisations to get a clearer view of the program topology.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python3}
+in0 = gr.istream()
+total = gr.const(0)
+for i in range(avg_window):
+  total = in0 + total
+  in0 = in0.offset(1)
+gr.ostream(total / gr.const(avg_window))
+  \end{minted}
+  \caption{Repeated application of offset1}\label{optimisation.offset_rm}
+\end{listing}
+
+\subsubsection{Offset Replacer}
+In dataflow graphs, performing a binary operation sooner rather than later will reduce the number of buffers required in a circuit. Consider the expression \lstinline|x.offset(1) + y.offset(2)| visible in the dataflow graph in figure \ref{dataflow.offset_rename} \hyphen{} this requires three buffers and an adder. By replacing it with \lstinline|(x + y.offset(1)).offset(1)|, we can reduce the number of buffers to two. The algorithm for this replaces any instance of a binary operation with two inputs from `offset' nodes with a version adjusted such that at most one of the operands is offset, and the result of the binary operation is offset. This can be seen in algorithm \ref{optimisation.replacing_offset}.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{algorithm}[H]
+\caption{Replacing Offsets}\label{optimisation.replacing_offset}
+\begin{algorithmic}[1]
+\Function{RewriteOffset}{$op <: $ BinOp[Offset, Offset]}
+\State $offset_0 \gets op.left.offset$
+\State $offset_1 \gets op.right.offset$
+\If{$offset_0$ > $offset_1$}
+\State $offset_{in} \gets offset_0 - offset_1$
+\State $offset_{out} \gets offset_1$
+\State $new\_offset \gets $Offset($op.left.parent$, $offset_{in}$)
+\State $new\_op \gets $Offset(BinOp($new\_offset$, $op.right.parent$), $offset_{out}$)
+\State replace($op$, $new\_op$)
+\ElsIf{$offset_0$ < $offset_1$}
+\State $offset_{in} \gets offset_1 - offset_0$
+\State $offset_{out} \gets offset_0$
+\State $new\_offset \gets $Offset($op.right.parent$, $offset_{in}$)
+\State $new\_op \gets $Offset(BinOp($op.left.parent$, $new\_offset$), $offset_{out}$)
+\State replace($op$, $new\_op$)
+\Else
+\State $offset_{out} \gets offset_0$
+\State $new\_op \gets $Offset(BinOp($op.left.parent$, $op.right.parent$), $offset_{out}$)
+\State replace($op$, $new\_op$)
+\EndIf
+\EndFunction
+\end{algorithmic}
+\end{algorithm}
+
+\begin{figure}[h]
+  \centering
+  \begin{subfigure}[t]{0.5\textwidth}\centering
+    \begin{tikzpicture}[node distance=1cm,circuit ee IEC]
+      % below n
+      \node (x) [xshift=0cm]{$x$};
+      \node (y) [right=of x,xshift=0cm]{$y$};
+      \node (buf_0) [buf,below=of x]{last};
+      \node (buf_1) [buf,below=of y]{last};
+      \node (buf_2) [buf,below=of buf_1]{last};
+      \node (add_0) [op, below=of buf_0]{$+$};
+      \node (out) [below=of add_0] {$out$};
+      \draw[->](x)--(buf_0);
+      \draw[->](y)--(buf_1);
+      \draw[->](buf_1)--(buf_2);
+      \draw[->](buf_2)--(add_0);
+      \draw[->](buf_0)--(add_0);
+      \draw[->](add_0)--(out);
+    \end{tikzpicture}
+    \caption{Before Replacement}
+  \end{subfigure}%
+  \begin{subfigure}[t]{0.5\textwidth}\centering
+    \begin{tikzpicture}[node distance=1cm,circuit ee IEC]
+      % below n
+      \node (x) [xshift=0cm]{$x$};
+      \node (y) [right=of x,xshift=0cm]{$y$};
+      \node (buf_0) [buf,below=of y]{last};
+      \node (add_0) [op, below=of x]{$+$};
+      \node (buf_1) [buf,below=of add_0]{last};
+      \node (out) [below=of buf_1] {$out$};
+      \draw[->](x)--(add_0);
+      \draw[->](y)--(buf_0);
+      \draw[->](buf_0)--(add_0);
+      \draw[->](add_0)--(buf_1);
+      \draw[->](buf_1)--(out);
+    \end{tikzpicture}
+    \caption{After replacement}
+  \end{subfigure}
+  \caption{Offset replacement: dataflow graphs}\label{dataflow.offset_rename}
+\end{figure}
+
+\subsubsection{Expression Eliminator}
+Following the application of the offset renamer and replacer, there is potential for duplicate expressions both in the form of offsets where the same node is offset by the same amount, constants with the same integer value, and in binary operations where the same binary operation is performed on the same two operands \hyphen{} including in the reverse order on commutative operations. Considering the \lstinline|x.offset(1) + y.offset(2)| example from the `Offset Replacer' \hyphen{} if we were to have another available expression \lstinline|x + y.offset(1)|, we would change the former to \lstinline|(x + y.offset(1)).offset(1)|, after which we could merge both \lstinline|y.offset(1)| expressions, and then finally merge the \lstinline|x + y.offset(1)| expressions to produce the same result as the unoptimised code, but with one adder and two buffers rather than the original two adders and four buffers \hyphen{} a resource usage decrease of 50\%.
+
+\subsection{Node Timing}
+Nodes in the \lstinline|flow_2| dialect are untimed. This means that retiming, offsets and buffering cannot be checked and applied. To enable these to happen a new, timed, dialect is introduced: \lstinline|flow_timed|. A sample of the \lstinline|flow_timed| dialect implementing an inner product can be seen in listing \ref{dialect.flow_timed}.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\makeatletter
+\AtBeginEnvironment{minted}{\dontdofcolorbox}
+\def\dontdofcolorbox{\renewcommand\fcolorbox[4][]{##4}}
+\makeatother
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{llvm}
+%0 = "flow_timed.istream"() {"uid" = "in0"} : () -> !flow_timed.wnode<#int<0>, #int<32>>
+%1 = "flow_timed.istream"() {"uid" = "in1"} : () -> !flow_timed.wnode<#int<0>, #int<32>>
+%2 = "flow_timed.binop"(%0, %1) {"op" = "*", "uid" = "current"} : (!flow_timed.wnode<#int<0>, #int<32>>, !flow_timed.wnode<#int<0>, #int<32>>) -> !flow_timed.node<#int<1>>
+%3 = "flow_timed.binop"(%2, %4) {"op" = "+", "uid" = "sum_out"} : (!flow_timed.node<#int<1>>, !flow_timed.node<#int<1>>) -> !flow_timed.node<#int<2>>
+%4 = "flow_timed.offset"(%3) {"offset" = #int<-1>} : (!flow_timed.node<#int<2>>) -> !flow_timed.node<#int<1>>
+%5 = "flow_timed.ostream"(%3) {"uid" = "out0"} : (!flow_timed.node<#int<2>>) -> !flow_timed.wnode<#int<2>, #int<32>>  
+  \end{minted}
+  \cprotect\caption{An implementation of an inner product in the \lstinline|flow_timed| dialect}\label{dialect.flow_timed}
+\end{listing}
+
+\subsubsection{Setting Times}
+The time setting algorithm currently requires that all logic involving operations on a node require one, and only one, clock cycle. Although this is suboptimal for reasons described in section \ref{ext.retime}, it is sufficient for all dataflow graphs, including cyclic graphs, which have sufficient dependency distance for there to be one clock cycle for each of these operations. When the accumulator and resettable nodes are used in place of most offsets to the last value, this retimable subset is the vast majority of dataflow graphs.
+
+The timing algorithm assigns each node a \lstinline|lo| and \lstinline|hi| time for when it can be ready \hyphen{} these can be \lstinline|None| if there is no upper or lower limit, such as upper limits in the case of outputs, or if its limits have not been calculated yet. The first stage is to set all timings on inputs to \lstinline|lo, hi = 0|. This is because all inputs are populated at time zero by definition. This timing is then propagated forward though the graph according to the timings in table \ref{fwd.timings}. While the \lstinline|hi| timings are not too useful currently other than for detecting timing violations, when the new timing algorithm as described in section \ref{ext.retime} is implemented these will be much more useful.
+
+Setting times is an iterative process \hyphen{} in cases of cycles, it is evident that the node will have one fewer input to set its timings based on in the initial run, however after one iteration, that input should be populated by at least something. More complex cycles may require more iterations, for instance if a node is cycled back to multiple points. Nodes are only updated from the \lstinline|flow2| to \lstinline|flow_timed| dialect when the values of its lower and upper limits match and are not \lstinline|None|, with the exception of constants, which are untimed by nature. Leaving nodes which are untimed as \lstinline|flow2| after the timings have reached a stable solution means that nodes which are unable to be timed due to their cycle dependency distance being too low to be easily identified and reported as compiler errors to the user. It is worth noting that in some cases, cycles will cause the lower and upper bounds to increase on each cycle, for instance if there are no restrictions after the untimeable node. These are detected as their \lstinline|lo| and \lstinline|hi| values will increase consistently on each iteration \hyphen{} this consistent behaviour can be tracked and caught.
+
+\begin{table}[h]
+  \centering
+  \begin{threeparttable}
+  \begin{tabular}{|c|c|c|c|}
+    \hline
+    \textbf{Node Type} & \textbf{Input 1} & \textbf{Input 2} & \textbf{Output} \\
+    \hline IStream & \hyphen{} & \hyphen{} & $(0, 0)$ \\
+    \hline OStream & $(t_{lo}, t_{hi})$ & \hyphen{} & $(t_{lo}, t_{hi})$ \\
+    \hline BinOp & $(a_{lo}, a_{hi})$ & $(b_{lo}, b_{hi})$ & $(\max(a_{lo}, b_{lo}), \max(a_{hi}, b_{hi}) + 1)$ \\
+    \hline UnaryOp & $(t_{lo}, t_{hi})$ & \hyphen{} & $(t_{lo} + 1, t_{hi} + 1)$ \\
+    \hline Const & \hyphen{} & \hyphen{} & (None, None) \\
+    \hline Slice & $(t_{lo}, t_{hi})$ & \hyphen{} & $(t_{lo}, t_{hi})$ \\
+    \hline Concat\tnote{1} & $(t_{lo}, t_{hi})\dots$ & \hyphen{} & $(\max(t_{lo}), \max(t_{hi}))$ \\
+    \hline Resettable & $(t_{lo}, t_{hi})$ & \hyphen{} & $(t_{lo}, t_{hi})$ \\
+    \hline
+  \end{tabular}
+  \begin{tablenotes}
+    \item [1] Note that Concat can operate on any number of inputs.
+  \end{tablenotes}
+  \end{threeparttable}
+  \caption{Cascading of timings}\label{fwd.timings}
+\end{table}
+
+
+\subsection{Input Retimer}\label{algo.timing}
+In some cases, the time-setting algorithm does not converge and not all nodes are converted from the \lstinline|flow2| dialect to the \lstinline|flow_timed| dialect. This is as a result of timing constraints not being met, for example nodes may depend on future values or, in the case of an uncompilable input, the value of a node may depend on itself at the current time. Any node which does not depend, including indirect dependence, on its own value at the current time or a future time can be retimed such that the `current' time moves to the time the latest node it depends on becomes ready. This changes the other input nodes to require buffering, and therefore also be ready at the time the calculation is performed.
+
+\subsubsection{Detecting Problematic Offsets}
+Problematic offsets appear when times have been assigned such that a node being offset is given a ready time after the ready time of the offset. This can occur as the  This is not possible as it would require an inverse buffer, which doesn't exist. An example of this can be seen in listing \ref{mvg_avg.forward}, with a rewritten version in listing \ref{mvg_avg.backward} \hyphen{} the two listings are equivalent in hardware, however there are implications for timing and buffering. Recalling that the latency between the input and output is not strictly defined, it can be deduced that these graphs produce the same output, however there is still the issue that in the version with the forward offset, there is a situation where the value of \lstinline|t_0| depend on an input value which has not entered the system yet. These issues can be resolved by firstly redefining the origin time $t$ as four clock cycles earlier than it was previously. By adding buffers on the input, it is then possible to get the value of \lstinline|in0| at both $t=0$ and $t=3$. These buffers are added during this step, to produce a modified graph. An equivalent code listing for this can be seen in listing \ref{mvg_avg.modified}. As the ready time of \lstinline|in0_before| is fixed to zero, changing this to effectively be four cycles earlier allows the value which comes in at time zero, previously time four, to be ready for the calculation of \lstinline|t_0|. 
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python3}
+    avg_window = 4
+    in0 = gr.istream(32)
+    t_0 = in0.offset(avg_window - 1) - in0
+    total = gr.forward_ref("total").offset(-1) + t_0
+    c1 = gr.const(avg_window)
+    div_t = total / c1
+    out0 = gr.ostream(div_t, 32)
+  \end{minted}
+  \caption{Flow DSL Moving Average: Forward Offset}\label{mvg_avg.forward}
+\end{listing}
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python3}
+    avg_window = 4
+    in0 = gr.istream(32)
+    t_0 = in0 - in0.offset(-avg_window + 1)
+    total = t_0 + gr.forward_ref("total").offset(-1)
+    c1 = gr.const(avg_window)
+    div_t = total / c1
+    out0 = gr.ostream(div_t, 32)
+  \end{minted}
+  \caption{Flow DSL Moving Average: Backward Offset}\label{mvg_avg.backward}
+\end{listing}
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{python3}
+    avg_window = 4
+    in0_before = gr.istream(32)
+    in0 = in0_before.offset(-avg_window)
+    t_0 = in0.offset(avg_window - 1) - in0
+    total = gr.forward_ref("total").offset(-1) + t_0
+    c1 = gr.const(avg_window)
+    div_t = total / c1
+    out0 = gr.ostream(div_t, 32)
+  \end{minted}
+  \caption{Flow DSL Moving Average: Backward Offset, Modified}\label{mvg_avg.modified}
+\end{listing}
+
+\subsubsection{Detiming}
+When problematic nodes are detected, the timing on any nodes which are `descendant's of the input node which has had an offset inserted after it will have incorrect timing. As there was an offset which violated timing constraints, fixing this is not as simple as just subtracting the time of the offset from each descendant \hyphen{} their timing must be fully re-analysed. To enable this, every node in the graph is replaced with their equivalent from the \lstinline|flow2| dialect. The timing algorithm as described in section \ref{algo.timing} is applied again. While it would be possible to only replace affected nodes, this would mean a new retiming rewrite pattern would need to be implemented, as the predetermined timings for \lstinline|flow_timed| nodes are not considered using the current algorithm.
+
+\subsection{xDSL To Hardware}
+To get from a still dataflow-adjacent dialect to a dialect closer to hardware, a new dialect, \lstinline|hard_flow|, is introduced. This dialect replaces the concept of a `Node' with the concept of a `Register' \hyphen{} while they are functionally identical, the dialect departs from the ideas of dataflow programming, therefore the naming convention matches this departure. One feature introduced by the \lstinline|hard_flow| dialect compared to the \lstinline|flow_timed| dialect are buffers, which work atop both offsets and places where implicit buffering is required, such as the example in figure \ref{dataflow.implicit_buffer}. The other is widths for nodes beyond inputs and outputs, so that registers and wires of the correct width can be declared in Verilog. An example of the \lstinline|hard_flow| dialect can be seen in listing \ref{dialect.hard}. As the inner product does not introduce any buffering, examples of a moving average in \lstinline|flow_timed| and \lstinline|hard_flow| are given in listings \ref{dialect.timed.mvg} and \ref{dialect.hard.mvg} respectively. To ensure that timing information is maintained, offsets are maintained. While the offsets do not map to anything in hardware, keeping offsets allows for any discrepancies in argument timing to be detected by the `Flow Printer', rather than assuming the discrepancies are due to offsets.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\makeatletter
+\AtBeginEnvironment{minted}{\dontdofcolorbox}
+\def\dontdofcolorbox{\renewcommand\fcolorbox[4][]{##4}}
+\makeatother
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{llvm}
+%0 = "hard_flow.istream"() {"uid" = "in0"} : () -> !hard_flow.reg<#int<0>, #int<32>>
+%1 = "hard_flow.istream"() {"uid" = "in1"} : () -> !hard_flow.reg<#int<0>, #int<32>>
+%2 = "hard_flow.binop"(%0, %1) {"op" = "*", "uid" = "current"} : (!hard_flow.reg<#int<0>, #int<32>>, !hard_flow.reg<#int<0>, #int<32>>) -> !hard_flow.reg<#int<1>, #int<32>>
+%3 = "hard_flow.binop"(%2, %<UNKNOWN>) {"op" = "+", "uid" = "sum_out"} : (!hard_flow.reg<#int<1>, #int<32>>, !hard_flow.reg<#int<1>, #int<32>>) -> !hard_flow.reg<#int<2>, #int<32>>
+%4 = "hard_flow.offset"(%3) {"offset" = #int<-1>} : (!hard_flow.reg<#int<2>, #int<32>>) -> !hard_flow.reg<#int<1>, #int<32>>
+%5 = "hard_flow.ostream"(%3) {"uid" = "out0"} : (!hard_flow.reg<#int<2>, #int<32>>) -> !hard_flow.reg<#int<2>, #int<32>>
+  \end{minted}
+  \cprotect\caption{An implementation of an inner product in the \lstinline|hard_flow| dialect}\label{dialect.hard}
+\end{listing}
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\makeatletter
+\AtBeginEnvironment{minted}{\dontdofcolorbox}
+\def\dontdofcolorbox{\renewcommand\fcolorbox[4][]{##4}}
+\makeatother
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{llvm}
+%0 = "flow_timed.istream"() {"uid" = "in0"} : () -> !flow_timed.wnode<#int<0>, #int<32>>
+%1 = "flow_timed.offset"(%0) {"offset" = #int<-3>} : (!flow_timed.wnode<#int<0>, #int<32>>) -> !flow_timed.node<#int<-3>>
+%2 = "flow_timed.binop"(%0, %1) {"op" = "-", "uid" = "t_0"} : (!flow_timed.wnode<#int<0>, #int<32>>, !flow_timed.node<#int<-3>>) -> !flow_timed.node<#int<1>>
+%3 = "flow_timed.binop"(%2, %4>) {"op" = "+", "uid" = "total"} : (!flow_timed.node<#int<1>>, !flow_timed.node<#int<1>>) -> !flow_timed.node<#int<2>>
+%4 = "flow_timed.offset"(%3) {"offset" = #int<-1>} : (!flow_timed.node<#int<2>>) -> !flow_timed.node<#int<1>>
+%5 = "flow_timed.const"() {"value" = #int<4>, "uid" = "c1"} : () -> !flow_timed.const_t<#int<32>>
+%6 = "flow_timed.binop"(%3, %5) {"op" = "/", "uid" = "div_t"} : (!flow_timed.node<#int<2>>, !flow_timed.const_t<#int<32>>) -> !flow_timed.node<#int<3>>
+%7 = "flow_timed.ostream"(%6) {"uid" = "out0"} : (!flow_timed.node<#int<3>>) -> !flow_timed.wnode<#int<3>, #int<32>>
+  \end{minted}
+  \cprotect\caption{An implementation of a moving average in the \lstinline|flow_timed| dialect}\label{dialect.timed.mvg}
+\end{listing}
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\makeatletter
+\AtBeginEnvironment{minted}{\dontdofcolorbox}
+\def\dontdofcolorbox{\renewcommand\fcolorbox[4][]{##4}}
+\makeatother
+\begin{listing}[H]
+  \begin{minted}[numbers=left, breaklines]{llvm}
+%0 = "hard_flow.istream"() {"uid" = "in0"} : () -> !hard_flow.reg<#int<0>, #int<32>>
+%1 = "hard_flow.offset"(%0) {"offset" = #int<-3>} : (!hard_flow.reg<#int<0>, #int<32>>) -> !hard_flow.reg<#int<-3>, #int<35>>
+%2 = "hard_flow.buffer"(%1) {"by" = #int<3>} : (!hard_flow.reg<#int<-3>, #int<35>>) -> !hard_flow.reg<#int<0>, #int<35>>
+%3 = "hard_flow.binop"(%0, %2) {"op" = "-", "uid" = "t_0"} : (!hard_flow.reg<#int<0>, #int<32>>, !hard_flow.reg<#int<0>, #int<35>>) -> !hard_flow.reg<#int<1>, #int<35>>
+%4 = "hard_flow.binop"(%3, %5) {"op" = "+", "uid" = "total"} : (!hard_flow.reg<#int<1>, #int<35>>, !hard_flow.reg<#int<1>, #int<35>>) -> !hard_flow.reg<#int<2>, #int<35>>
+%5 = "hard_flow.offset"(%4) {"offset" = #int<-1>} : (!hard_flow.reg<#int<2>, #int<35>>) -> !hard_flow.reg<#int<1>, #int<35>>
+%6 = "hard_flow.const"() {"value" = #int<4>, "uid" = "c1"} : () -> !hard_flow.const_t<#int<3>>
+%7 = "hard_flow.binop"(%4, %6) {"op" = "/", "uid" = "div_t"} : (!hard_flow.reg<#int<2>, #int<35>>, !hard_flow.const_t<#int<3>>) -> !hard_flow.reg<#int<3>, #int<32>>
+%8 = "hard_flow.ostream"(%7) {"uid" = "out0"} : (!hard_flow.reg<#int<3>, #int<32>>) -> !hard_flow.reg<#int<3>, #int<32>>
+  \end{minted}
+  \cprotect\caption{An implementation of a moving average in the \lstinline|hard_flow| dialect}\label{dialect.hard.mvg}
+\end{listing}
+
+\begin{figure}[h]
+  \centering
+  \begin{subfigure}[t]{0.5\textwidth}\centering
+    \begin{tikzpicture}[node distance=1cm,circuit ee IEC]
+      % below n
+      \node (x) [xshift=0cm]{$x_0$};
+      \node (y) [right=of x,xshift=-0.2cm]{$y_0$};
+      \node (add_0) [op,below=of y,label={[label distance=-0.15cm]south east: \scriptsize 1}]{$+$};
+      \node (add_1) [op, below left=of add_0,label={[label distance=-0.15cm]south east: \scriptsize 2}]{$+$};
+      \node (out) [below=of add_1] {$out_2$};
+      \draw[->](x)--(add_0);
+      \draw[->](y)--(add_0);
+      \draw[->](x)--(add_1);
+      \draw[->](add_0)--(add_1);
+      \draw[->](add_1)--(out);
+    \end{tikzpicture}
+    \caption{Without implicit buffering}
+  \end{subfigure}%
+  \begin{subfigure}[t]{0.5\textwidth}\centering
+    \begin{tikzpicture}[node distance=1cm,circuit ee IEC]
+      \node (x) [xshift=0cm]{$x_0$};
+      \node (y) [right=of x,xshift=-0.2cm]{$y_0$};
+      \node (add_0) [op,below=of y,label={[label distance=-0.15cm]south east: \scriptsize 1}]{$+$};
+      \node (buf_0) [op,below=of x,label={[label distance=-0.15cm]south east: \scriptsize 1}]{nop};
+      \node (add_1) [op, below=of buf_0,label={[label distance=-0.15cm]south east: \scriptsize 2}]{$+$};
+      \node (out) [below=of add_1] {$out_2$};
+      \draw[->](x)--(add_0);
+      \draw[->](x)--(buf_0);
+      \draw[->](y)--(add_0);
+      \draw[->](add_0)--(add_1);
+      \draw[->](buf_0)--(add_1);
+      \draw[->](add_1)--(out);
+    \end{tikzpicture}
+    \caption{With implicit buffering}
+  \end{subfigure}
+  \caption{Offset replacement: timed dataflow graphs} \label{dataflow.implicit_buffer}
+\end{figure}
+
+\subsubsection*{Introduction of Buffers}
+The introduction of explicit buffers marks the largest departure from the IR code from the dataflow programming model. Buffers are used to store values between when they are created and when they are used. It is important to note that an offset doesn't imply a buffer, and the lack of an offset doesn't imply the lack of a buffer. As shown in figure \ref{dataflow.implicit_buffer}, buffers can be implicit as a result of an operation being performed with inputs ready at different times, and as in the Flow DSL. As shown in figure \ref{dataflow.no_buffer}, offsets which result in a timing slack of zero \hyphen{} that is the offset results in the input to an operation being ready one cycle before the output, an offset can result in no buffering. Buffers are introduced with the formula $b_{arg} = t_{op} - t_{arg}$, where $op$ has $arg$ as an argument and $b_{arg}$ is the number of buffers required for $arg$. As $arg$ may be an argument for multiple operations, the final value $b_{arg}$ is determined by the maximum value for any operation which $arg$ is an argument to. As constants do not change per-cycle, they are immune from buffering and so $b_{const} = 0$ $\forall$ $const$.
+
+\begin{figure}[h]
+  \centering
+  \begin{subfigure}[t]{0.5\textwidth}\centering
+    \caption{Without implicit buffering}
+    \begin{tikzpicture}[node distance=1cm,circuit ee IEC]
+      % below n
+      \node (x) [xshift=0cm]{$x_0$};
+      \node (add_0) [op,below=of x,label={[label distance=-0.15cm]south east: \scriptsize 1}]{$+$};
+      \node (buf_0) [buf, right=of add_0,label={[label distance=-0.15cm]south east: \scriptsize 0}]{last};
+      \node (out) [below=of add_0] {$out_1$};
+      \draw[->](x)--(add_0);
+      \path
+        (add_0)[->,bend right] edge node [right] {} (buf_0)
+        (buf_0)[->,bend right] edge node [left] {} (add_0);
+      \draw[->](add_0)--(out);
+    \end{tikzpicture}
+  \end{subfigure}%
+  \begin{subfigure}[t]{0.5\textwidth}\centering
+    \caption{With implicit buffering}
+    \begin{tikzpicture}[node distance=1cm,circuit ee IEC]
+      % below n
+      \node (x) [xshift=0cm]{$x_0$};
+      \node (add_0) [op,below=of x,label={[label distance=-0.15cm]south east: \scriptsize 1}]{$+$};
+      \node (out) [below=of add_0] {$out_1$};
+      \draw[->](x)--(add_0);
+      \path (add_0)[->, loop right,in=25,out=-25,min distance=0.3cm,looseness=10] edge [right] node [right] {} (add_0);
+      \draw[->](add_0)--(out);
+    \end{tikzpicture}
+  \end{subfigure}
+  \caption{Offset replacement: timed dataflow graphs}\label{dataflow.no_buffer}
+\end{figure}
+
+\subsubsection{Setting Widths}
+Initially, widths are only set for inputs and outputs \hyphen{} either explicitly by the user or by using the default of four bytes. four bytes was chosen as this is the default size of an integer in most programming languages, however a single byte also would've been a valid choice as this is frequently used in image processing, parallel communication and other domains.
+
+For RTL code to be generated, widths are needed for every node of the graph. While the default sizes for binary operations are written in \ref{embedding.binops.width}, this oversimplifies the concept. Considering the operation \lstinline|x = gr.forward_ref("x").offset(-2) * y|, and applying the formula for multiplication, $w_x = w_x + w_y$, we find that $w_x$ will tend to infinity as part of an iterative process. We therefore not only need to generate widths based on the inputs available to them, but also the outputs used. These widths based on output usage can be seen in table \ref{widths.output}. Note that the  While additional challenges are provided by logical operators such as \lstinline||||, \lstinline|&&|, \lstinline|!| amongst others, for most cases by combining the bits available to an operation with the bits used by an operation, we will reach a single value for the width of the node's output \hyphen{} this will come from the maximum value in the set of used bits.
+
+\begin{table}[h]
+  \centering
+  \begin{threeparttable}
+  \begin{tabular}{|c|c|c|c|}
+    \hline
+    \textbf{Operator} & \textbf{Available Bits} & \textbf{Used Input Bits} & \textbf{Used Bits} \\
+    \hline \lstinline|&| (BAND) & $w_1$ & $w_2$ & $w_2$ \\
+    \hline \lstinline||| (BOR) & $w_1$ & $w_2$ & $w_2$ \\
+    \hline \lstinline|^| (XOR) & $w_1$ & $w_2$ & $w_2$ \\
+    \hline \lstinline|+| (ADD) & $w_1$ & $w_2$ & $w_2$ \\
+    \hline \lstinline|-| (SUB) & $w_1$ & $w_2$ & $w_2$ \\
+    \hline \lstinline|*| (MUL) & $w_1$ & $w_2$ & $w_2$ \\
+    \hline \lstinline|/| (DIV) & $w_1$ & $w_2$ & $w_1$ $\cup$ $w_2$ \\
+    \hline \lstinline|%| (MOD) & $w_1$ & $w_2$ & $w_1$ $\cup$ $w_2$ \\
+    \hline \lstinline|<<| (LSL)\tnote{1} & $w_1$ & $w_2$ & $w$ $\forall$ $w \ge c$ $\in$ $w_2$  \\
+    \hline \lstinline|>>| (LSR)\tnote{1} & $w_1$ & $w_2$ & $w + c$ $\forall$ $w$ $\in$ $w_2$  \\
+    \hline \lstinline|and| (LAND) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|or| (LOR) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|==| (EQ) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|!=| (NEQ) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|>=| (GE) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|>| (GT) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|<=| (LE) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|<| (LT) & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|@| (CAT)\tnote{2} & $w_1$ & $w_2$ & $w_1$ \\
+    \hline \lstinline|[c1:c2]| (SLICE) & $w_1$ & $c_1, c_2$ & $x \forall c_1 \le x < c_2 \in \mathbb{Z}$ \\
+    \hline
+  \end{tabular}
+  \begin{tablenotes}
+    \item [1] $c$ is the shift amount, which must be constant
+    \item [2] Cat is a special case, where more bits than used may be output to allow consistent indexing
+  \end{tablenotes}
+  \end{threeparttable}
+  \caption{Default bit width of binary operators based on output widths}\label{widths.output}
+\end{table}
+
+\subsection{Flow Printer}\label{sect:compiling.flow_printer}
+While it would have been ideal to extend xDSL's \lstinline|Printer| class, which already contains mechanisms for keeping track of the names of Single Static Assignment Values (SSAValues) among other functionality useful for outputting the target language, in this case Verilog, this was not possible due to Python's poor support for subclassing and inheritance \hyphen{} there were some key restrictions in how methods were called which stopped the extended version from working. It was therefore necessary to implement a new printer, \lstinline|FlowPrinter|, to take \lstinline|hard_flow| code and output Verilog.
+
+While there are no optimisations as such applied to the \lstinline|hard_flow| code, the flow printer still contains a number of transformation algorithms necessary to bridge the gap between the IR and Verilog.
+
+\subsubsection{Naming Variables}\label{naming}
+As variables may have been merged, significantly reordered, erased or otherwise modified in such a way that their name has not been retained, and variables which had generated names assigned in section \ref{graph.2.xdsl} may have lost their names, new names are assigned to any non-buffer variables without a \lstinline|uid| return type attribute. The `print context' keeps track of the names of both named and unnamed variables, and if a the name for a new unnamed variable is requested, a name is assigned in the form \lstinline|gen_{i}|, where $i$ is a sequentially increasing integer.
+
+As forward references may still be present, the list of nodes is first iterated though and an initial call to \lstinline|PrintContext.get_name(SSAValue)| is applied to each \lstinline|SSAValue|, aka node return value, in the graph. This introduces each variable into the print context and assigns them a name.
+
+One exception to variables being given a name are constants. Constants are invoked directly as their integral value with their correct width, rather than connecting them as registers or wires which may serve to complicate the design, especially if a single constant assigned to a single net is used in multiple operations \hyphen{} this may lead to fairly complex interconnects. Another exception to variables being named in the above form are buffers. Buffers are named in the form \lstinline|buffer_{node}_{t}|, where $node$ is the name of the node being buffered, and $t$ is the number of clock cycles after the initial calculation \hyphen{} this may include generated nodes and offsets, but not constants.
+
+\subsubsection{Applying Buffers}
+Buffers are explicitly included in \lstinline|hard_flow|, therefore while they do not need to be generated here, they follow a different naming system to other SSAValues, as detailed in \ref{naming}. The buffers are kept track of in the `Print Context' aside from other variables, so that they can be generated, propagated, initialised and added to the output without needing to recalculate them each time.
+
+\subsubsection{Implicit Reset}\label{reset.implicit}
+To honour the commitment to one input per clock cycle while still allowing accumulators and other user-selected signals to be affected by a reset signal, an implicit reset is generated. With the timing algorithm in its current form, it is only possible to add buffers, not to remove them, therefore to allow for accumulators and other `reduce' or `scan' style functions to work, a special zero clock cycle operation needs to be introduced, as the register \lstinline|acc| in \lstinline|acc = (gr.forward_ref('acc').offset(-1) + in0) & reset_n| would be a timing violation, as the result would be ready one clock cycle later than it needs to be.
+
+The reset signal cannot reset the registers on the next clock cycle, as that would require them to be held low for an entire clock cycle, causing those inputs to be missed. To honour the reset signal and the one input per clock concept at the same time, we can buffer the reset signal and apply it on inputs to nodes, rather than as inputs to registers. An example of this can be seen in listing \ref{compiled.inner_product}, where a simple add based accumulator is used with a reset to 0 on the input to the node \lstinline|sum_out|.
+
+\renewcommand\theFancyVerbLine{\arabic{FancyVerbLine}}
+\begin{listing}[H]
+  \begin{minted}[numbers=left]{verilog}
+module GeneratedModule(
+    input clk,
+    input reset_n,
+    input [31:0] in0,
+    input [31:0] in1,
+    output [31:0] out0
+);
+  reg buffer_reset_n_1;
+  reg [31:0] current;
+  reg [31:0] sum_out;
+  wire [31:0] gen_0 = buffer_reset_n_1? sum_out : 0;
+  initial begin
+    buffer_reset_n_1 = 0;
+    current = 0;
+    sum_out = 0;
+  end
+  assign out0 = sum_out;
+  always @(posedge clk) begin
+    buffer_reset_n_1 <= reset_n;
+    current <= in0 * in1;
+    sum_out <= gen_0 + current;
+  end
+endmodule
+\end{minted}
+  \caption{Inner product compiled from Flow DSL to Verilog}\label{compiled.inner_product}
+\end{listing}
+
+\subsubsection{Output}
+The output language is Verilog, and so the output follows the syntax of Verilog. This means that first the inputs and outputs, plus an implicit \lstinline|clock| and \lstinline|reset_n| are printed \hyphen{} these are all `wires', however the output is most frequently connected directly to a register, effectively functioning as an `output reg'. Once the module header is printed, buffers for the reset signal are added \hyphen{} these are based on when the last \lstinline|resettable| or accumulator node is located, and if there are no \lstinline|resettable| nodes this step will be skipped. All buffering nodes are also added here, with a data structure to keep track of their initialisation values for simulation, otherwise the values of cyclic graphs would not propagate in Verilog. The binary and unary operation results are also declared as registers here.
+
+After all the registers have been declared, an \lstinline|initial| block is used to initialise all buffers to zero. This is the only time that a value not specified in the dataflow graph is written to a buffer \hyphen{} when \lstinline|reset_n| is high, the value is the buffer is updated as normal, with the update value potentially changing from the normal operation of the graph if there is a \lstinline|resettable| input.
+
+Following the register declaration and initialisation, wires are declared. These wires are only used for \lstinline|resettable| inputs \hyphen{} constants and offsets are written inline.
+
+The final part of the Verilog program is to update the buffers and outputs from binary operations. A clocked block, declared with \lstinline|always @(posedge clk)|, is used to enable this. Each buffer is cascaded with the next value being the current value of the previous buffer, or the input to the buffer if it is the first value in the chain, in the form \lstinline|buffer_(nd)_(i) <= buffer_(nd)_(i-1)|. After buffer updates are output, binary operations are output, with the register being updated with the result of the binary operation.
+
+Currently there is no support for writing directly to a file as this was deemed unnecessary for testing purposes, however this could easily be added by giving the `Flow Printer' a output stream \hyphen{} this could be standard output, should the user desire the resulting Verilog to be written to the console.
+
+\par\noindent\hrulefill\par
+
+In this section, the full compilation process of Flow DSL was detailed, including some details of where the compilation process would ideally have been done differently. The method for outputting the resultant Verilog from the IR was detailed.
